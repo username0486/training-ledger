@@ -1,0 +1,271 @@
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --font-size: 16px;
+  
+  /* Workout app color system - Dark mode default */
+  --background: #0a0b0d;
+  --panel: #12141a;
+  --surface: #1a1d26;
+  --surface-secondary: #21242e;
+  
+  --text-primary: #e8e9ed;
+  --text-muted: #8a8d98;
+  --text-disabled: #4a4d58;
+  
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-medium: rgba(255, 255, 255, 0.12);
+  
+  --accent: #5b8ef4;
+  --accent-hover: #6b9df5;
+  --accent-muted: rgba(91, 142, 244, 0.12);
+  
+  --danger: #e85d5d;
+  --danger-hover: #ef6d6d;
+  --danger-muted: rgba(232, 93, 93, 0.12);
+  
+  /* Gradients */
+  --gradient-card: linear-gradient(135deg, rgba(26, 29, 38, 0.9) 0%, rgba(33, 36, 46, 0.6) 100%);
+  --gradient-btn-primary: linear-gradient(135deg, #5b8ef4 0%, #4a7de3 100%);
+  --gradient-btn-neutral: linear-gradient(135deg, rgba(42, 45, 55, 1) 0%, rgba(33, 36, 46, 1) 100%);
+  --gradient-btn-danger: linear-gradient(135deg, #e85d5d 0%, #d74d4d 100%);
+  
+  /* States */
+  --overlay: rgba(10, 11, 13, 0.85);
+  --active: rgba(91, 142, 244, 0.18);
+  --disabled-bg: rgba(42, 45, 55, 0.4);
+  --disabled-text: #4a4d58;
+  
+  /* Legacy compatibility */
+  --foreground: var(--text-primary);
+  --card: var(--panel);
+  --card-foreground: var(--text-primary);
+  --popover: var(--surface);
+  --popover-foreground: var(--text-primary);
+  --primary: var(--accent);
+  --primary-foreground: #ffffff;
+  --secondary: var(--surface);
+  --secondary-foreground: var(--text-primary);
+  --muted: var(--surface-secondary);
+  --muted-foreground: var(--text-muted);
+  --destructive: var(--danger);
+  --destructive-foreground: #ffffff;
+  --border: var(--border-subtle);
+  --input: var(--surface);
+  --input-background: var(--surface);
+  --switch-background: var(--surface-secondary);
+  --ring: var(--accent);
+  
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --font-weight-semibold: 600;
+  
+  --radius: 0.75rem;
+  
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(0.269 0 0);
+  --sidebar-ring: oklch(0.439 0 0);
+}
+
+/* Light theme */
+:root.light {
+  /* Light mode colors */
+  --background: #f8f9fa;
+  --panel: #ffffff;
+  --surface: #f1f3f5;
+  --surface-secondary: #e9ecef;
+  
+  --text-primary: #1a1d26;
+  --text-muted: #6b7280;
+  --text-disabled: #adb5bd;
+  
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-medium: rgba(0, 0, 0, 0.15);
+  
+  --accent: #4a7de3;
+  --accent-hover: #5b8ef4;
+  --accent-muted: rgba(74, 125, 227, 0.12);
+  
+  --danger: #dc3545;
+  --danger-hover: #e85d5d;
+  --danger-muted: rgba(220, 53, 69, 0.12);
+  
+  /* Gradients */
+  --gradient-card: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(241, 243, 245, 0.8) 100%);
+  --gradient-btn-primary: linear-gradient(135deg, #4a7de3 0%, #5b8ef4 100%);
+  --gradient-btn-neutral: linear-gradient(135deg, rgba(241, 243, 245, 1) 0%, rgba(233, 236, 239, 1) 100%);
+  --gradient-btn-danger: linear-gradient(135deg, #dc3545 0%, #e85d5d 100%);
+  
+  /* States */
+  --overlay: rgba(248, 249, 250, 0.9);
+  --active: rgba(74, 125, 227, 0.12);
+  --disabled-bg: rgba(241, 243, 245, 0.6);
+  --disabled-text: #adb5bd;
+  
+  /* Legacy compatibility */
+  --foreground: var(--text-primary);
+  --card: var(--panel);
+  --card-foreground: var(--text-primary);
+  --popover: var(--surface);
+  --popover-foreground: var(--text-primary);
+  --primary: var(--accent);
+  --primary-foreground: #ffffff;
+  --secondary: var(--surface);
+  --secondary-foreground: var(--text-primary);
+  --muted: var(--surface-secondary);
+  --muted-foreground: var(--text-muted);
+  --destructive: var(--danger);
+  --destructive-foreground: #ffffff;
+  --border: var(--border-subtle);
+  --input: var(--surface);
+  --input-background: var(--surface);
+  --switch-background: var(--surface-secondary);
+  --ring: var(--accent);
+}
+
+@theme inline {
+  /* Workout app tokens */
+  --color-background: var(--background);
+  --color-panel: var(--panel);
+  --color-surface: var(--surface);
+  --color-surface-secondary: var(--surface-secondary);
+  
+  --color-text-primary: var(--text-primary);
+  --color-text-muted: var(--text-muted);
+  --color-text-disabled: var(--text-disabled);
+  
+  --color-border-subtle: var(--border-subtle);
+  --color-border-medium: var(--border-medium);
+  
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-muted: var(--accent-muted);
+  
+  --color-danger: var(--danger);
+  --color-danger-hover: var(--danger-hover);
+  --color-danger-muted: var(--danger-muted);
+  
+  --color-overlay: var(--overlay);
+  --color-active: var(--active);
+  --color-disabled-bg: var(--disabled-bg);
+  --color-disabled-text: var(--disabled-text);
+  
+  /* Legacy compatibility */
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-input-background: var(--input-background);
+  --color-switch-background: var(--switch-background);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border-subtle outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-text-primary;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /**
+  * Default typography styles for HTML elements (h1-h4, p, label, button, input).
+  * These are in @layer base, so Tailwind utility classes (like text-sm, text-lg) automatically override them.
+  */
+
+  html {
+    font-size: var(--font-size);
+  }
+
+  h1 {
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+  }
+
+  h2 {
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.35;
+    letter-spacing: -0.01em;
+  }
+
+  h3 {
+    font-weight: var(--font-weight-medium);
+    line-height: 1.4;
+  }
+
+  h4 {
+    font-weight: var(--font-weight-medium);
+    line-height: 1.4;
+  }
+
+  label {
+    font-weight: var(--font-weight-medium);
+    line-height: 1.4;
+  }
+
+  button {
+    font-weight: var(--font-weight-medium);
+    line-height: 1.4;
+  }
+
+  input {
+    font-weight: var(--font-weight-normal);
+    line-height: 1.5;
+  }
+
+  @keyframes pulse-completed {
+    0%, 100% {
+      color: var(--text-muted);
+    }
+    50% {
+      color: var(--accent);
+    }
+  }
+
+  .animate-pulse-completed {
+    animation: pulse-completed 1s ease-in-out;
+  }
+}
