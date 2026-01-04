@@ -16,4 +16,18 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  build: {
+    outDir: 'dist',
+    assetsDir: 'assets',
+    // Ensure proper chunking for better caching
+    rollupOptions: {
+      output: {
+        manualChunks: undefined,
+      },
+    },
+  },
+  // Base path for production (root domain)
+  base: '/',
+  // Ensure public folder assets are properly copied
+  publicDir: 'public',
 })
