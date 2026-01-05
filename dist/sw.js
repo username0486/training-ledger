@@ -54,6 +54,37 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  const url = new URL(event.request.url);
+  
+  // Special handling for systemExercises.json - never return HTML fallback
+  // Handle both /exercises/systemExercises.json and /systemExercises.json paths
+  if (url.pathname === '/exercises/systemExercises.json' || url.pathname === '/systemExercises.json') {
+    event.respondWith(
+      fetch(event.request, { cache: 'no-store' })
+        .then((response) => {
+          // Only cache successful JSON responses
+          if (response.ok && response.headers.get('content-type')?.includes('application/json')) {
+            const responseToCache = response.clone();
+            caches.open(RUNTIME_CACHE).then((cache) => {
+              cache.put(event.request, responseToCache);
+            });
+          }
+          return response;
+        })
+        .catch((error) => {
+          // Try cache as fallback, but never return HTML
+          return caches.match(event.request).then((cachedResponse) => {
+            if (cachedResponse && cachedResponse.headers.get('content-type')?.includes('application/json')) {
+              return cachedResponse;
+            }
+            // If no valid cache and network fails, return the network error (not HTML)
+            throw error;
+          });
+        })
+    );
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       // Return cached version if available
