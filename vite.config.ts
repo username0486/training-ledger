@@ -19,6 +19,8 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
+    minify: 'esbuild',
+    sourcemap: false, // Disable sourcemaps in production for smaller bundle
     // Ensure proper chunking for better caching
     rollupOptions: {
       output: {
@@ -30,4 +32,13 @@ export default defineConfig({
   base: '/',
   // Ensure public folder assets are properly copied
   publicDir: 'public',
+  // Dev server configuration for consistent port and HMR
+  server: {
+    port: 5174,
+    strictPort: false, // Allow fallback to next available port if 5174 is busy
+    hmr: {
+      port: 5174,
+      clientPort: 5174, // Explicitly set client port for HMR
+    },
+  },
 })

@@ -57,7 +57,8 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   
   // Special handling for systemExercises.json - never return HTML fallback
-  if (url.pathname === '/systemExercises.json') {
+  // Handle both /exercises/systemExercises.json and /systemExercises.json paths
+  if (url.pathname === '/exercises/systemExercises.json' || url.pathname === '/systemExercises.json') {
     event.respondWith(
       fetch(event.request, { cache: 'no-store' })
         .then((response) => {
@@ -73,10 +74,10 @@ self.addEventListener('fetch', (event) => {
         .catch((error) => {
           // Try cache as fallback, but never return HTML
           return caches.match(event.request).then((cachedResponse) => {
-            if (cachedResponse) {
+            if (cachedResponse && cachedResponse.headers.get('content-type')?.includes('application/json')) {
               return cachedResponse;
             }
-            // If no cache and network fails, return the network error (not HTML)
+            // If no valid cache and network fails, return the network error (not HTML)
             throw error;
           });
         })

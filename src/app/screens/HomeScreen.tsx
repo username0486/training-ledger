@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Sun, Moon, ListPlus, Play } from 'lucide-react';
+import { Plus, ListPlus, Play, Database, Trash2, Settings } from 'lucide-react';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Workout } from '../types';
@@ -7,6 +7,7 @@ import { IncompleteExerciseSession } from '../types';
 import { WorkoutTemplate } from '../types/templates';
 import { formatTimeAgo } from '../utils/storage';
 import appIcon from '../../images/icon-192x192.png';
+import { seedAllDemoData, resetAndSeed, isDemoDataSeeded } from '../../utils/devSeed';
 
 interface HomeScreenProps {
   unfinishedWorkout: Workout | null;
@@ -21,6 +22,9 @@ interface HomeScreenProps {
   onLogExercise: () => void;
   onResumeWorkout: () => void;
   onResumeExercise: () => void;
+  onDiscardWorkout: () => void;
+  onDiscardExercise: () => void;
+  onOpenSettings: () => void;
 }
 
 export function HomeScreen({
@@ -29,6 +33,7 @@ export function HomeScreen({
   workoutTemplates,
   theme,
   onThemeChange,
+  onUnitChange,
   onCreateTemplate,
   onViewTemplate,
   onStartTemplate,
@@ -36,9 +41,32 @@ export function HomeScreen({
   onLogExercise,
   onResumeWorkout,
   onResumeExercise,
+  onDiscardWorkout,
+  onDiscardExercise,
+  onOpenSettings,
 }: HomeScreenProps) {
-  const toggleTheme = () => {
-    onThemeChange(theme === 'light' ? 'dark' : 'light');
+
+  // Dev-only: Seed demo data
+  const handleSeedData = () => {
+    if (import.meta.env.PROD) {
+      alert('Seeding is disabled in production');
+      return;
+    }
+    if (confirm('Seed demo data? This will add workouts, templates, and usage stats.')) {
+      seedAllDemoData();
+      alert('Demo data seeded! Refresh the page to see changes.');
+    }
+  };
+
+  const handleResetAndSeed = () => {
+    if (import.meta.env.PROD) {
+      alert('Seeding is disabled in production');
+      return;
+    }
+    if (confirm('Reset and reseed all demo data? This will DELETE all existing workouts and templates.')) {
+      resetAndSeed();
+      alert('Demo data reset and reseeded! Refresh the page to see changes.');
+    }
   };
 
   // Timer state for resume card
@@ -75,21 +103,18 @@ export function HomeScreen({
             
             <div className="flex-1">
               <h1 className="text-3xl mb-2">Training Ledger</h1>
-              <p className="text-text-muted">Track training without the noise</p>
+              <p className="text-text-muted" style={{ marginTop: '-10px' }}>Track training without the noise</p>
             </div>
           </div>
           
-          {/* Theme Toggle */}
+          {/* Settings Button */}
           <button
-            onClick={toggleTheme}
-            className="p-2 -mr-2 rounded-xl hover:bg-panel transition-colors"
-            aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
+            onClick={onOpenSettings}
+            className="p-2 rounded-xl hover:bg-panel transition-colors text-text-muted hover:text-text-primary"
+            aria-label="Settings"
+            title="Settings"
           >
-            {theme === 'light' ? (
-              <Moon className="w-5 h-5 text-text-muted" />
-            ) : (
-              <Sun className="w-5 h-5 text-text-muted" />
-            )}
+            <Settings className="w-5 h-5" />
           </button>
         </div>
 
@@ -109,16 +134,30 @@ export function HomeScreen({
                       Started {formatTimeAgo(unfinishedWorkout.startTime)}
                     </p>
                   </div>
-                  <Button 
-                    variant="primary" 
-                    size="sm" 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onResumeWorkout();
-                    }}
-                  >
-                    Resume
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm('Discard this workout session? This cannot be undone.')) {
+                          onDiscardWorkout();
+                        }
+                      }}
+                      className="p-2 rounded-lg border border-border-subtle hover:bg-surface/50 text-text-muted hover:text-danger hover:border-danger/30 transition-colors"
+                      title="Discard workout"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                    <Button 
+                      variant="primary" 
+                      size="sm" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onResumeWorkout();
+                      }}
+                    >
+                      Resume
+                    </Button>
+                  </div>
                 </div>
               </Card>
             )}
@@ -137,22 +176,36 @@ export function HomeScreen({
                         <>
                           <span className="text-text-muted/40">·</span>
                           <p className="text-text-muted/60 tabular-nums text-sm">
-                            {Math.floor(restTimerElapsed / 60)}:{(restTimerElapsed % 60).toString().padStart(2, '0')} rest
+                            {Math.floor(restTimerElapsed / 60)}:{(restTimerElapsed % 60).toString().padStart(2, '0')} since last set
                           </p>
                         </>
                       )}
                     </div>
                   </div>
-                  <Button 
-                    variant="primary" 
-                    size="sm" 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onResumeExercise();
-                    }}
-                  >
-                    Resume
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm('Discard this exercise session? This cannot be undone.')) {
+                          onDiscardExercise();
+                        }
+                      }}
+                      className="p-2 rounded-lg border border-border-subtle hover:bg-surface/50 text-text-muted hover:text-danger hover:border-danger/30 transition-colors"
+                      title="Discard exercise session"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                    <Button 
+                      variant="primary" 
+                      size="sm" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onResumeExercise();
+                      }}
+                    >
+                      Resume
+                    </Button>
+                  </div>
                 </div>
               </Card>
             )}
@@ -229,6 +282,33 @@ export function HomeScreen({
             </div>
           )}
         </div>
+
+        {/* Dev-only: Seed demo data buttons */}
+        {import.meta.env.DEV && (
+          <div className="space-y-3 pt-4 border-t border-border-subtle">
+            <h2 className="text-xs uppercase tracking-wide text-text-muted px-1">Dev Tools</h2>
+            <div className="flex gap-2">
+              <Button
+                variant="neutral"
+                onClick={handleSeedData}
+                className="flex-1 text-xs"
+                title="Add demo data without deleting existing data"
+              >
+                <Database className="w-3 h-3 mr-1 inline" />
+                Seed Data
+              </Button>
+              <Button
+                variant="neutral"
+                onClick={handleResetAndSeed}
+                className="flex-1 text-xs"
+                title="Reset all data and reseed"
+              >
+                <Database className="w-3 h-3 mr-1 inline" />
+                Reset & Seed
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

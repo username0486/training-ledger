@@ -5,27 +5,49 @@ import { Button } from './Button';
 interface SessionConflictModalProps {
   isOpen: boolean;
   onClose: () => void;
-  sessionType: 'exercise' | 'workout';
+  inProgressSessionType: 'exercise' | 'workout';
+  requestedSessionType: 'exercise' | 'workout';
   sessionName: string;
   onResume: () => void;
   onDiscard: () => void;
   onSaveAndContinue?: () => void;
 }
 
+/**
+ * Generate dynamic modal copy based on in-progress and requested session types
+ */
+function getModalCopy(
+  inProgress: 'exercise' | 'workout',
+  requested: 'exercise' | 'workout'
+) {
+  const inProgressLabel = inProgress === 'exercise' ? 'exercise' : 'workout';
+  const requestedLabel = requested === 'exercise' ? 'exercise' : 'workout';
+  
+  return {
+    title: `${inProgress === 'exercise' ? 'Exercise' : 'Workout'} in progress`,
+    body: `You have an active ${inProgressLabel} already open.`,
+    resumeButton: `Resume ${inProgressLabel}`,
+    startNewButton: `Start new ${requestedLabel}`,
+  };
+}
+
 export function SessionConflictModal({
   isOpen,
   onClose,
-  sessionType,
+  inProgressSessionType,
+  requestedSessionType,
   sessionName,
   onResume,
   onDiscard,
   onSaveAndContinue,
 }: SessionConflictModalProps) {
+  const copy = getModalCopy(inProgressSessionType, requestedSessionType);
+  
   return (
     <Modal 
       isOpen={isOpen} 
       onClose={onClose}
-      title="Workout in progress"
+      title={copy.title}
       headerAction={
         <button
           onClick={onClose}
@@ -37,17 +59,19 @@ export function SessionConflictModal({
     >
       <div className="space-y-6">
         <p className="text-text-muted text-center">
-          You have an active workout already open.
+          {copy.body}
         </p>
 
         <div className="space-y-3">
           <Button onClick={onResume} variant="primary" className="w-full">
-            Resume workout
+            {copy.resumeButton}
           </Button>
           
-          <Button onClick={onDiscard} variant="neutral" className="w-full">
-            Start new workout
-          </Button>
+          {onSaveAndContinue && (
+            <Button onClick={onSaveAndContinue} variant="neutral" className="w-full">
+              {copy.startNewButton}
+            </Button>
+          )}
         </div>
       </div>
     </Modal>

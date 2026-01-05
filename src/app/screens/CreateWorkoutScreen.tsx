@@ -4,10 +4,9 @@ import { TopBar } from '../components/TopBar';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { FloatingLabelInput } from '../components/FloatingLabelInput';
-import { Input } from '../components/Input';
-import { Modal } from '../components/Modal';
 import { ExerciseSearchBottomSheet } from '../components/ExerciseSearchBottomSheet';
-import { loadExercisesDB, searchExercises, addExerciseToDb } from '../utils/exerciseDb';
+import { ExerciseSearch } from '../components/ExerciseSearch';
+import { addExerciseToDb } from '../utils/exerciseDb';
 
 interface CreateWorkoutScreenProps {
   initialName?: string;
@@ -25,27 +24,32 @@ export function CreateWorkoutScreen({
   const [workoutName, setWorkoutName] = useState(initialName);
   const [exercises, setExercises] = useState<string[]>(initialExercises);
   const [showAddExercise, setShowAddExercise] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
-
-  const exercisesDB = loadExercisesDB();
-  const searchResults = searchExercises(searchQuery, exercisesDB);
-  const hasMatches = searchResults.length > 0;
-  const showFallback = searchQuery.trim() !== '' && !hasMatches;
 
   const handleAddExercise = (name: string) => {
     if (name.trim() && !exercises.includes(name.trim())) {
       const trimmedName = name.trim();
       
-      // Add to database if it's a new exercise
-      if (!exercisesDB.includes(trimmedName)) {
+      // Add to database if it's a new exercise (ExerciseSearch handles recording as recent)
+      try {
         addExerciseToDb(trimmedName);
+      } catch (error) {
+        // Exercise might already exist, that's fine
       }
       
       setExercises([...exercises, trimmedName]);
-      setSearchQuery('');
       setShowAddExercise(false);
     }
+  };
+
+  const handleAddNewExercise = (name: string) => {
+    // Add new exercise to DB and to workout
+    try {
+      addExerciseToDb(name);
+    } catch (error) {
+      // Might already exist
+    }
+    handleAddExercise(name);
   };
 
   const handleRemoveExercise = (index: number) => {
@@ -163,49 +167,18 @@ export function CreateWorkoutScreen({
         isOpen={showAddExercise}
         onClose={() => {
           setShowAddExercise(false);
-          setSearchQuery('');
         }}
         title="Add Exercise"
       >
-        <div className="space-y-3">
-          <Input
-            placeholder="Search exercises..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            autoFocus
-          />
-          
-          <div className="space-y-1">
-            {hasMatches ? (
-              searchResults.map((exerciseName) => (
-                <button
-                  key={exerciseName}
-                  onClick={() => handleAddExercise(exerciseName)}
-                  className="w-full text-left px-4 py-3 rounded-lg hover:bg-surface transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  disabled={exercises.includes(exerciseName)}
-                >
-                  <p className="text-text-primary">
-                    {exerciseName}
-                    {exercises.includes(exerciseName) && (
-                      <span className="text-text-muted ml-2">(added)</span>
-                    )}
-                  </p>
-                </button>
-              ))
-            ) : showFallback ? (
-              <button
-                onClick={() => handleAddExercise(searchQuery)}
-                className="w-full text-left px-4 py-3 rounded-lg hover:bg-surface transition-colors flex items-center justify-between"
-              >
-                <div>
-                  <p className="text-text-primary mb-0.5">Add new exercise</p>
-                  <p className="text-text-muted">{searchQuery}</p>
-                </div>
-                <span className="text-accent">Add</span>
-              </button>
-            ) : null}
-          </div>
-        </div>
+        <ExerciseSearch
+          onSelectExercise={handleAddExercise}
+          onAddNewExercise={handleAddNewExercise}
+          selectedExercises={exercises}
+          placeholder="Search exercises..."
+          autoFocus={true}
+          showDetails={true}
+          createButtonLabel="Create & add"
+        />
       </ExerciseSearchBottomSheet>
     </div>
   );

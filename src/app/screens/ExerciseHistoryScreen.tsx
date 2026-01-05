@@ -3,6 +3,7 @@ import { TopBar } from '../components/TopBar';
 import { Card } from '../components/Card';
 import { Workout } from '../types';
 import { formatDate } from '../utils/storage';
+import { formatWeight } from '../../utils/weightFormat';
 
 interface ExerciseHistoryScreenProps {
   exerciseName: string;
@@ -72,13 +73,13 @@ export function ExerciseHistoryScreen({
             <Card className="text-center">
               <p className="text-xs uppercase tracking-wide text-text-muted mb-1">Max Weight Logged</p>
               <p className="text-2xl">
-                {Math.max(...performances.map(p => p.avgWeight)).toFixed(1)} kg
+                {formatWeight(Math.max(...performances.map(p => p.avgWeight)))}
               </p>
             </Card>
             <Card className="text-center">
               <p className="text-xs uppercase tracking-wide text-text-muted mb-1">Max Volume Logged</p>
               <p className="text-2xl">
-                {Math.max(...performances.map(p => p.totalVolume)).toFixed(0)} kg
+                {formatWeight(Math.max(...performances.map(p => p.totalVolume)), 0)}
               </p>
             </Card>
           </div>
@@ -154,13 +155,13 @@ export function ExerciseHistoryScreen({
                             <p className="text-xs uppercase tracking-wide text-text-muted mb-0.5">
                               Total Volume
                             </p>
-                            <p className="text-text-primary">{perf.totalVolume.toFixed(0)} kg</p>
+                            <p className="text-text-primary">{formatWeight(perf.totalVolume, 0)}</p>
                           </div>
                           <div>
                             <p className="text-xs uppercase tracking-wide text-text-muted mb-0.5">
                               Avg Weight
                             </p>
-                            <p className="text-text-primary">{perf.avgWeight.toFixed(1)} kg</p>
+                            <p className="text-text-primary">{formatWeight(perf.avgWeight)}</p>
                           </div>
                         </div>
                       </div>

@@ -8,6 +8,7 @@ import { ExerciseSessionScreen } from './screens/ExerciseSessionScreen';
 import { WorkoutSummaryScreen } from './screens/WorkoutSummaryScreen';
 import { ExerciseHistoryScreen } from './screens/ExerciseHistoryScreen';
 import { HistoryScreen } from './screens/HistoryScreen';
+import { SettingsScreen } from './screens/SettingsScreen';
 import { Banner } from './components/Banner';
 import { Modal } from './components/Modal';
 import { ExerciseSearchBottomSheet } from './components/ExerciseSearchBottomSheet';
@@ -20,8 +21,10 @@ import { WorkoutTemplate } from './types/templates';
 import { IncompleteExerciseSession } from './types';
 import { saveWorkouts, loadWorkouts, getUnfinishedWorkout, getWorkoutHistory, getLastSessionForExercise, saveIncompleteExerciseSession, loadIncompleteExerciseSession, saveIncompleteWorkoutId, loadIncompleteWorkoutId } from './utils/storage';
 import { loadTemplates, saveTemplate, deleteTemplate, saveTemplates } from './utils/templateStorage';
-import { addExerciseToDb, loadExercisesDB, searchExercises, initializeExerciseDatabase, ExerciseDBEntry } from './utils/exerciseDb';
+import { addExerciseToDb, loadExercisesDB, searchExercises, initializeExerciseDatabase, ExerciseDBEntry, getAllExercisesList } from './utils/exerciseDb';
 import { saveWorkout, deleteWorkouts as deleteWorkoutsApi } from './utils/api';
+import { recordSwap } from '../utils/exerciseSwapHistory';
+import { loadPreferences, getAppearance, setAppearance } from '../utils/preferences';
 
 
 type AppScreen = 
@@ -32,7 +35,8 @@ type AppScreen =
   | { type: 'exercise-session'; exerciseName: string }
   | { type: 'workout-summary'; workoutId: string; isJustCompleted?: boolean; isSingleExercise?: boolean; previousScreen?: AppScreen }
   | { type: 'exercise-history'; exerciseName: string; previousScreen?: AppScreen }
-  | { type: 'history'; searchQuery?: string; scrollPosition?: number; restoreKey?: number };
+  | { type: 'history'; searchQuery?: string; scrollPosition?: number; restoreKey?: number }
+  | { type: 'settings'; previousScreen?: AppScreen };
 
 export default function App() {
   const [workouts, setWorkouts] = useState<Workout[]>(() => loadWorkouts());
@@ -47,8 +51,20 @@ export default function App() {
   const [showExerciseComplete, setShowExerciseComplete] = useState(false);
   const [showFinishConfirm, setShowFinishConfirm] = useState(false);
   const [finishWorkoutId, setFinishWorkoutId] = useState<string | null>(null);
+  // Load preferences on mount
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const [unitChangeKey, setUnitChangeKey] = useState(0); // Trigger re-renders when units change
+  
+  const handleUnitChange = () => {
+    setUnitChangeKey(prev => prev + 1);
+  };
+  
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    // Load theme from localStorage, default to system preference
+    // Load from preferences first, fallback to old localStorage key, then system preference
+    const prefs = loadPreferences();
+    if (prefs.appearance) {
+      return prefs.appearance;
+    }
     const savedTheme = localStorage.getItem('workout-app-theme');
     if (savedTheme === 'light' || savedTheme === 'dark') {
       return savedTheme;
@@ -59,6 +75,16 @@ export default function App() {
     }
     return 'dark';
   });
+
+  // Initialize preferences on mount
+  useEffect(() => {
+    const prefs = loadPreferences();
+    // Sync theme with preferences
+    if (prefs.appearance && prefs.appearance !== theme) {
+      setTheme(prefs.appearance);
+    }
+    setPreferencesLoaded(true);
+  }, []);
   
   // Session conflict state
   const [showSessionConflict, setShowSessionConflict] = useState(false);
@@ -72,7 +98,7 @@ export default function App() {
     initializeExerciseDatabase();
   }, []);
 
-  // Apply theme to document root
+  // Apply theme to document root and sync with preferences
   useEffect(() => {
     const root = document.documentElement;
     if (theme === 'light') {
@@ -80,9 +106,12 @@ export default function App() {
     } else {
       root.classList.remove('light');
     }
-    // Save theme preference
+    // Save theme preference (both old key for backward compat and new preferences system)
     localStorage.setItem('workout-app-theme', theme);
-  }, [theme]);
+    if (preferencesLoaded) {
+      setAppearance(theme);
+    }
+  }, [theme, preferencesLoaded]);
 
   // Save incomplete exercise session to localStorage whenever it changes
   useEffect(() => {
@@ -174,50 +203,85 @@ export default function App() {
     setPendingAction(null);
   };
 
+  /**
+   * Handle "Start New" when a session is already in progress.
+   * 
+   * Behavior:
+   * - If meaningful work exists (sets or completed exercises): Save to history
+   * - If session is empty (0 sets AND 0 completed exercises): Discard
+   * - Show appropriate banner message based on session type and action
+   * - Then execute pending action to start new session
+   */
   const handleSaveAndContinueConflictSession = () => {
-    // Save existing session
-    if (incompleteExerciseSession && screen.type === 'exercise-session') {
-      const workout: Workout = {
-        id: Date.now().toString(),
-        name: incompleteExerciseSession.exerciseName,
-        exercises: [{
+    // Handle single exercise session
+    if (incompleteExerciseSession) {
+      const hasSets = incompleteExerciseSession.sets.length > 0;
+      
+      if (hasSets) {
+        // Save: meaningful work exists (has sets)
+        const workout: Workout = {
           id: Date.now().toString(),
           name: incompleteExerciseSession.exerciseName,
-          sets: incompleteExerciseSession.sets,
+          exercises: [{
+            id: Date.now().toString(),
+            name: incompleteExerciseSession.exerciseName,
+            sets: incompleteExerciseSession.sets,
+            isComplete: true,
+          }],
+          startTime: incompleteExerciseSession.startTime || Date.now(),
+          endTime: Date.now(),
           isComplete: true,
-        }],
-        startTime: Date.now(),
-        endTime: Date.now(),
-        isComplete: true,
-      };
-      setWorkouts([...workouts, workout]);
+        };
+        setWorkouts([...workouts, workout]);
+        setBanner({ message: 'Previous exercise saved', variant: 'info' });
+      } else {
+        // Discard: empty session (0 sets)
+        setBanner({ message: 'Previous exercise discarded (0 sets)', variant: 'info' });
+      }
+      
+      // Clear incomplete session state
       setIncompleteExerciseSession(null);
       setExerciseSessionSets([]);
     }
     
+    // Handle workout session
     if (unfinishedWorkout) {
-      // Mark workout as complete
-      const completedWorkout = workouts.find(w => w.id === unfinishedWorkout.id);
-      if (completedWorkout && completedWorkout.exercises.some(ex => ex.sets.length > 0)) {
-        // Save with only exercises that have sets
-        setWorkouts(workouts.map(w => {
-          if (w.id === unfinishedWorkout.id) {
-            return {
-              ...w,
-              exercises: w.exercises.filter(ex => ex.sets.length > 0),
-              isComplete: true,
-              endTime: Date.now(),
-            };
-          }
-          return w;
-        }));
-      } else {
-        // Discard if no sets
-        setWorkouts(workouts.filter(w => w.id !== unfinishedWorkout.id));
+      const workout = workouts.find(w => w.id === unfinishedWorkout.id);
+      if (workout) {
+        // Check for meaningful work:
+        // - At least one set logged, OR
+        // - At least one exercise marked as complete
+        const totalSets = workout.exercises.reduce((sum, ex) => sum + ex.sets.length, 0);
+        const hasCompletedExercise = workout.exercises.some(ex => ex.isComplete);
+        const hasMeaningfulWork = totalSets > 0 || hasCompletedExercise;
+        
+        if (hasMeaningfulWork) {
+          // Save: meaningful work exists
+          // Remove exercises with no sets, mark as complete
+          const exercisesWithSets = workout.exercises.filter(ex => ex.sets.length > 0);
+          setWorkouts(workouts.map(w => {
+            if (w.id === workout.id) {
+              return {
+                ...w,
+                exercises: exercisesWithSets,
+                isComplete: true,
+                endTime: Date.now(),
+              };
+            }
+            return w;
+          }));
+          saveIncompleteWorkoutId(null);
+          setBanner({ message: 'Previous workout saved', variant: 'info' });
+        } else {
+          // Discard: empty session (0 sets AND 0 completed exercises)
+          setWorkouts(workouts.filter(w => w.id !== workout.id));
+          saveIncompleteWorkoutId(null);
+          setBanner({ message: 'Previous workout discarded (0 sets)', variant: 'info' });
+        }
       }
     }
     
-    // Execute pending action
+    // Execute pending action (start new workout/exercise)
     if (pendingAction) {
       executePendingAction();
     }
@@ -307,24 +371,52 @@ export default function App() {
     setExerciseName('');
   };
 
+  /**
+   * Repeat a completed workout by creating a NEW, FRESH session.
+   * This clones the structure (exercises that were performed) but NOT the history (sets).
+   * 
+   * Rules:
+   * - Never reopens or mutates historical data
+   * - Always creates a new active session instance
+   * - Populates from what ACTUALLY HAPPENED (exercises with sets), not from template
+   * - Preserves order from historical session (including ad-hoc additions/swaps)
+   * - New session starts clean (no sets logged yet)
+   */
   const startWorkoutFromHistoryInternal = (workoutId: string) => {
     const workout = workouts.find(w => w.id === workoutId);
     if (!workout) return;
 
+    // Create a fresh workout session based on what was actually performed
+    // Include all exercises that were logged (have sets), preserving order
+    // This includes ad-hoc exercises and swaps that occurred mid-session
+    const exercisesFromHistory = workout.exercises
+      .filter(ex => ex.sets.length > 0) // Only include exercises that were actually performed
+      .map((ex, index) => ({
+        id: `${Date.now()}-${index}-${Math.random()}`, // Ensure unique ID
+        name: ex.name,
+        sets: [], // Start with empty sets - fresh session
+        isComplete: false, // Explicitly reset completion status (never copy from history)
+      }));
+
+    // Edge case: If no exercises were performed, cannot repeat
+    if (exercisesFromHistory.length === 0) {
+      console.warn('Cannot repeat workout with no logged exercises');
+      return;
+    }
+
     const newWorkout: Workout = {
-      id: Date.now().toString(),
+      id: `${Date.now()}-${Math.random()}`, // Ensure unique ID
       name: workout.name,
-      exercises: workout.exercises.map(ex => ({
-        ...ex,
-        id: Date.now().toString() + Math.random(),
-        sets: [],
-      })),
+      exercises: exercisesFromHistory,
       startTime: Date.now(),
-      isComplete: false,
+      isComplete: false, // Explicitly set as incomplete (never copy from history)
     };
+
     setWorkouts(prev => [...prev, newWorkout]);
     saveIncompleteWorkoutId(newWorkout.id);
-    // Use setTimeout to ensure state update completes before navigation
+    
+    // Navigate directly to active session (not summary/completed screen)
+    // User should land ready to log, not on "all exercises complete" screen
     setTimeout(() => {
       setScreen({ type: 'workout-session', workoutId: newWorkout.id });
     }, 0);
@@ -381,7 +473,13 @@ export default function App() {
   };
 
   const handleLogExerciseFromModal = (name: string) => {
-    addExerciseToDb(name);
+    // Try to add exercise (will return existing if it already exists)
+    try {
+      addExerciseToDb(name);
+    } catch (error) {
+      // Exercise might already exist, that's fine - just proceed
+      console.log('[App] Exercise already exists or error adding:', error);
+    }
     startExerciseSession(name);
     setBanner({ message: `Selected exercise: ${name}`, variant: 'info' });
   };
@@ -485,25 +583,16 @@ export default function App() {
   };
 
   const deferExercise = (workoutId: string, exerciseId: string) => {
-    // Move exercise after the next incomplete exercise
+    // Move exercise to the bottom of the list
     setWorkouts(workouts.map(w => {
       if (w.id === workoutId) {
         const exerciseIndex = w.exercises.findIndex(ex => ex.id === exerciseId);
         if (exerciseIndex === -1) return w;
         
         const exercise = w.exercises[exerciseIndex];
-        const nextIncompleteIndex = w.exercises.findIndex((ex, idx) => 
-          idx > exerciseIndex && !ex.isComplete
-        );
-        
-        // If no next incomplete exercise, move to end
-        const targetIndex = nextIncompleteIndex === -1 
-          ? w.exercises.length - 1 
-          : nextIncompleteIndex;
-        
         const newExercises = [...w.exercises];
         newExercises.splice(exerciseIndex, 1);
-        newExercises.splice(targetIndex, 0, exercise);
+        newExercises.push(exercise); // Move to end
         
         return { ...w, exercises: newExercises };
       }
@@ -515,6 +604,54 @@ export default function App() {
     setWorkouts(workouts.map(w => {
       if (w.id === workoutId) {
         return { ...w, exercises: newExercises };
+      }
+      return w;
+    }));
+  };
+
+  const swapExercise = (workoutId: string, exerciseId: string, newExerciseName: string) => {
+    const workout = workouts.find(w => w.id === workoutId);
+    if (!workout) return;
+
+    const exerciseToReplace = workout.exercises.find(ex => ex.id === exerciseId);
+    if (!exerciseToReplace) return;
+
+    // Find the original exercise in DB to get its ID for swap history
+    const allExercises = getAllExercisesList();
+    const originalDbExercise = allExercises.find(ex => ex.name === exerciseToReplace.name);
+    const replacementDbExercise = allExercises.find(ex => ex.name === newExerciseName);
+
+    // Record swap history
+    if (originalDbExercise && replacementDbExercise) {
+      recordSwap(
+        originalDbExercise.id,
+        replacementDbExercise.id,
+        workoutId,
+        exerciseId // Use exerciseId as slotId
+      );
+    }
+
+    // Replace the exercise in the slot
+    // Original exercise's sets remain attached to the original exercise (not moved)
+    // The replacement exercise starts fresh with no sets
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        return {
+          ...w,
+          exercises: w.exercises.map(ex => {
+            if (ex.id === exerciseId) {
+              // Replace exercise: new name, new ID, empty sets
+              // Original sets stay on original exercise (they're not moved)
+              return {
+                id: Date.now().toString() + Math.random(), // New ID for replacement
+                name: newExerciseName,
+                sets: [], // Start fresh - original sets remain on original exercise
+                isComplete: false, // Reset completion status
+              };
+            }
+            return ex;
+          }),
+        };
       }
       return w;
     }));
@@ -576,8 +713,20 @@ export default function App() {
 
   const discardWorkout = (workoutId: string) => {
     setWorkouts(workouts.filter(w => w.id !== workoutId));
+    saveIncompleteWorkoutId(null); // Clear incomplete workout ID
     setBanner({ message: 'Workout discarded', variant: 'info' });
     setScreen({ type: 'home' });
+  };
+
+  const handleDiscardWorkout = () => {
+    if (unfinishedWorkout) {
+      discardWorkout(unfinishedWorkout.id);
+    }
+  };
+
+  const handleDiscardExercise = () => {
+    setIncompleteExerciseSession(null);
+    setBanner({ message: 'Exercise session discarded', variant: 'info' });
   };
 
   const finishExerciseSession = (exerciseName: string, sets: any[]) => {
@@ -711,7 +860,10 @@ export default function App() {
 
   const deleteWorkouts = (workoutIds: string[]) => {
     setWorkouts(workouts.filter(w => !workoutIds.includes(w.id)));
-    setBanner({ message: `Deleted ${workoutIds.length} workout${workoutIds.length === 1 ? '' : 's'}`, variant: 'info' });
+    setBanner({ 
+      message: workoutIds.length === 1 ? 'Entry deleted' : `Deleted ${workoutIds.length} items`, 
+      variant: 'info' 
+    });
   };
 
 
@@ -722,8 +874,16 @@ export default function App() {
 
   return (
     <div className="size-full flex flex-col bg-background">
-      {/* Main content area with bottom padding for fixed nav */}
-      <div className="flex-1 overflow-hidden flex flex-col pb-24">
+      {/* Main content area with bottom padding for fixed nav (only when nav is visible) */}
+      <div className={`flex-1 overflow-hidden flex flex-col ${
+        !(
+          screen.type === 'create-template' ||
+          screen.type === 'view-template' ||
+          screen.type === 'workout-session' ||
+          screen.type === 'workout-summary' ||
+          screen.type === 'exercise-session'
+        ) ? 'pb-24' : ''
+      }`}>
 
         {screen.type === 'home' && (
           <HomeScreen
@@ -731,7 +891,12 @@ export default function App() {
             incompleteExerciseSession={incompleteExerciseSession}
             workoutTemplates={templates}
             theme={theme}
-            onThemeChange={setTheme}
+            onThemeChange={(newTheme) => {
+              setTheme(newTheme);
+              setAppearance(newTheme);
+            }}
+            onUnitChange={handleUnitChange}
+            onOpenSettings={() => setScreen({ type: 'settings', previousScreen: { type: 'home' } })}
             onCreateTemplate={() => setScreen({ type: 'create-template' })}
             onViewTemplate={(templateId) => setScreen({ type: 'view-template', templateId })}
             onStartTemplate={handleStartTemplate}
@@ -750,6 +915,8 @@ export default function App() {
               }
             }}
             onResumeExercise={resumeExerciseSession}
+            onDiscardWorkout={handleDiscardWorkout}
+            onDiscardExercise={handleDiscardExercise}
           />
         )}
 
@@ -778,10 +945,45 @@ export default function App() {
               template={template}
               lastSessionData={lastSessionData}
               onBack={() => setScreen({ type: 'home' })}
-              onStart={() => handleStartTemplate(template.id)}
+              onStart={(editedExerciseNames) => {
+                // Create workout with edited exercises (editedExerciseNames is always provided)
+                checkSessionConflict(
+                  () => {
+                    const newWorkout: Workout = {
+                      id: Date.now().toString(),
+                      name: template.name,
+                      exercises: editedExerciseNames.map(name => ({
+                        id: Date.now().toString() + Math.random(),
+                        name,
+                        sets: [],
+                      })),
+                      startTime: Date.now(),
+                      isComplete: false,
+                    };
+                    setWorkouts(prev => [...prev, newWorkout]);
+                    saveIncompleteWorkoutId(newWorkout.id);
+                    setTimeout(() => {
+                      setScreen({ type: 'workout-session', workoutId: newWorkout.id });
+                    }, 0);
+                  },
+                  'workout',
+                  { type: 'template', templateId: template.id }
+                );
+              }}
               onEdit={() => {
-                // TODO: Add edit functionality
-                setBanner({ message: 'Edit not yet implemented', variant: 'info' });
+                // Edit mode is handled internally by ViewTemplateScreen
+              }}
+              onSave={(name, exercises) => {
+                // Update template with edited name and exercises
+                const updatedTemplate: WorkoutTemplate = {
+                  ...template,
+                  name: name.trim(),
+                  exerciseNames: exercises,
+                  updatedAt: Date.now(),
+                };
+                saveTemplate(updatedTemplate);
+                setTemplates(templates.map(t => t.id === template.id ? updatedTemplate : t));
+                setBanner({ message: `Updated "${name}"`, variant: 'info' });
               }}
               onDelete={() => {
                 deleteTemplate(template.id);
@@ -840,6 +1042,7 @@ export default function App() {
               onCompleteExercise={(exerciseId) => completeExercise(workout.id, exerciseId)}
               onSkipExercise={(exerciseId) => skipExercise(workout.id, exerciseId)}
               onDeferExercise={(exerciseId) => deferExercise(workout.id, exerciseId)}
+              onSwapExercise={(exerciseId, newExerciseName) => swapExercise(workout.id, exerciseId, newExerciseName)}
               onReorderExercises={(newExercises) => reorderExercises(workout.id, newExercises)}
               onFinishWorkout={() => finishWorkout(workout.id)}
             />
@@ -925,7 +1128,28 @@ export default function App() {
                   setScreen({ type: 'exercise-session', exerciseName: exercise.name });
                 }
               }}
-              onStartAgain={() => startWorkoutFromHistory(workout.id)}
+              onDelete={() => {
+                // Delete the workout entry
+                deleteWorkouts([workout.id]);
+                // Navigate back to history if we came from there, otherwise home
+                if (screen.previousScreen && screen.previousScreen.type === 'history') {
+                  setScreen({ 
+                    ...screen.previousScreen, 
+                    restoreKey: Date.now() 
+                  });
+                } else {
+                  setScreen({ type: 'history' });
+                }
+              }}
+              onStartAgain={() => {
+                // Determine entry type and call appropriate repeat handler
+                const isExerciseOnly = workout.exercises.length === 1 && workout.name === workout.exercises[0]?.name;
+                if (isExerciseOnly) {
+                  startExerciseSession(workout.exercises[0].name);
+                } else {
+                  startWorkoutFromHistory(workout.id);
+                }
+              }}
               onViewExerciseHistory={(exerciseName) => {
                 setScreen({ 
                   type: 'exercise-history', 
@@ -959,9 +1183,12 @@ export default function App() {
                 }
               }}
               onViewWorkout={(workoutId) => {
+                const workout = workouts.find(w => w.id === workoutId);
+                const isExerciseOnly = workout && workout.exercises.length === 1 && workout.name === workout.exercises[0]?.name;
                 setScreen({ 
                   type: 'workout-summary', 
                   workoutId, 
+                  isSingleExercise: isExerciseOnly,
                   previousScreen: screen 
                 });
               }}
@@ -969,34 +1196,70 @@ export default function App() {
           );
         })()}
 
+        {screen.type === 'settings' && (
+          <SettingsScreen
+            theme={theme}
+            onThemeChange={(newTheme) => {
+              setTheme(newTheme);
+              setAppearance(newTheme);
+            }}
+            onUnitChange={handleUnitChange}
+            onBack={() => {
+              if (screen.previousScreen) {
+                setScreen(screen.previousScreen);
+              } else {
+                setScreen({ type: 'home' });
+              }
+            }}
+          />
+        )}
+
         {screen.type === 'history' && (
           <HistoryScreen
             key={`history-${screen.scrollPosition || 0}`}
             workouts={workoutHistory}
             theme={theme}
-            onThemeChange={setTheme}
+            onThemeChange={(newTheme) => {
+              setTheme(newTheme);
+              setAppearance(newTheme);
+            }}
+            onUnitChange={handleUnitChange}
+            onOpenSettings={() => setScreen({ type: 'settings', previousScreen: { type: 'history', searchQuery: screen.searchQuery, scrollPosition: screen.scrollPosition } })}
             initialSearchQuery={screen.searchQuery}
             initialScrollPosition={screen.scrollPosition}
             onBack={() => setScreen({ type: 'home' })}
-            onViewWorkout={(workoutId) => setScreen({ 
-              type: 'workout-summary', 
-              workoutId, 
-              previousScreen: screen 
-            })}
+            onViewWorkout={(workoutId) => {
+              const workout = workoutHistory.find(w => w.id === workoutId);
+              const isExerciseOnly = workout && workout.exercises.length === 1 && workout.name === workout.exercises[0]?.name;
+              setScreen({ 
+                type: 'workout-summary', 
+                workoutId, 
+                isSingleExercise: isExerciseOnly,
+                previousScreen: screen 
+              });
+            }}
             onViewExerciseHistory={(exerciseName) => setScreen({ 
               type: 'exercise-history', 
               exerciseName, 
               previousScreen: screen 
             })}
             onStartWorkout={startWorkoutFromHistory}
+            onStartExercise={startExerciseSession}
             onDeleteWorkouts={deleteWorkouts}
             onStateChange={handleHistoryStateChange}
           />
         )}
       </div>
 
-      {/* Bottom nav bar - hide on workout session screen */}
-      {screen.type !== 'workout-session' && (
+      {/* Bottom nav bar - hide during workout and exercise flows */}
+      {!(
+        screen.type === 'create-template' ||
+        screen.type === 'view-template' ||
+        screen.type === 'workout-session' ||
+        screen.type === 'workout-summary' ||
+        screen.type === 'exercise-session' ||
+        screen.type === 'settings'
+      ) && (
         <nav className="fixed bottom-0 left-0 right-0 pb-6 pt-4 px-4 z-50">
           <div className="max-w-md mx-auto">
             {/* Pill toggle container */}
@@ -1005,7 +1268,7 @@ export default function App() {
               <div 
                 className="absolute top-1 bottom-1 left-1 w-[calc(50%-0.25rem)] bg-accent/10 backdrop-blur-sm rounded-full transition-transform duration-200 ease-out border border-accent/20"
                 style={{
-                  transform: (screen.type === 'history' || screen.type === 'workout-summary' || screen.type === 'exercise-history') ? 'translateX(100%)' : 'translateX(0)',
+                  transform: (screen.type === 'history' || screen.type === 'workout-summary' || screen.type === 'exercise-history' || screen.type === 'settings') ? 'translateX(100%)' : 'translateX(0)',
                 }}
               />
               
@@ -1014,7 +1277,7 @@ export default function App() {
                 <button
                   onClick={() => setScreen({ type: 'home' })}
                   className={`py-3 px-6 flex items-center justify-center gap-2 transition-colors rounded-full relative z-10 ${
-                    !(screen.type === 'history' || screen.type === 'workout-summary' || screen.type === 'exercise-history') ? 'text-accent' : 'text-text-muted'
+                    !(screen.type === 'history' || screen.type === 'workout-summary' || screen.type === 'exercise-history' || screen.type === 'settings') ? 'text-accent' : 'text-text-muted'
                   }`}
                 >
                   <Dumbbell className="w-4 h-4" />
@@ -1023,7 +1286,7 @@ export default function App() {
                 <button
                   onClick={() => setScreen({ type: 'history' })}
                   className={`py-3 px-6 flex items-center justify-center gap-2 transition-colors rounded-full relative z-10 ${
-                    (screen.type === 'history' || screen.type === 'workout-summary' || screen.type === 'exercise-history') ? 'text-accent' : 'text-text-muted'
+                    (screen.type === 'history' || screen.type === 'workout-summary' || screen.type === 'exercise-history' || screen.type === 'settings') ? 'text-accent' : 'text-text-muted'
                   }`}
                 >
                   <List className="w-4 h-4" />
@@ -1093,14 +1356,15 @@ export default function App() {
 
 
       {/* Session Conflict Modal */}
-      {showSessionConflict && (incompleteExerciseSession || unfinishedWorkout) && (
+      {showSessionConflict && (incompleteExerciseSession || unfinishedWorkout) && pendingAction && (
         <SessionConflictModal
           isOpen={showSessionConflict}
           onClose={() => {
             setShowSessionConflict(false);
             setPendingAction(null);
           }}
-          sessionType={incompleteExerciseSession ? 'exercise' : 'workout'}
+          inProgressSessionType={incompleteExerciseSession ? 'exercise' : 'workout'}
+          requestedSessionType={pendingAction.type}
           sessionName={incompleteExerciseSession ? incompleteExerciseSession.exerciseName : unfinishedWorkout?.name || ''}
           onResume={handleResumeConflictSession}
           onDiscard={handleDiscardConflictSession}

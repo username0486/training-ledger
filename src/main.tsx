@@ -5,8 +5,9 @@
 
   createRoot(document.getElementById("root")!).render(<App />);
 
-  // Register service worker for PWA functionality
-  if ('serviceWorker' in navigator) {
+  // Register service worker for PWA functionality (production only)
+  // In dev mode, service worker can interfere with HMR and JSON loading
+  if (import.meta.env.PROD && 'serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('/sw.js')
         .then((registration) => {

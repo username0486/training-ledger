@@ -129,7 +129,7 @@ export function ExerciseSearchBottomSheet({
         </div>
 
         {/* Header */}
-        <div className="flex items-center justify-between px-6 pb-4 border-b border-border-subtle">
+        <div className="flex items-center justify-between px-6 pb-4 border-b border-border-subtle flex-shrink-0">
           <h2 className="text-xl font-semibold">{title}</h2>
           <button
             onClick={handleClose}
@@ -140,9 +140,9 @@ export function ExerciseSearchBottomSheet({
           </button>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto" style={{ maxHeight: 'calc(90vh - 120px)' }}>
-          <div className="p-6">
+        {/* Content - scrollable area */}
+        <div className="flex-1 overflow-y-auto min-h-0">
+          <div className="p-6 pb-6">
             {children}
           </div>
         </div>

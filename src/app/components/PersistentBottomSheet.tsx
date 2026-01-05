@@ -2,7 +2,7 @@ import { ReactNode, useState, useRef, useEffect } from 'react';
 import { ChevronUp, ChevronDown } from 'lucide-react';
 
 interface PersistentBottomSheetProps {
-  children: ReactNode;
+  children: ReactNode | ((isExpanded: boolean) => ReactNode);
   peekContent?: ReactNode;
   defaultExpanded?: boolean;
   isOpen?: boolean;
@@ -138,7 +138,7 @@ export function PersistentBottomSheet({
       <div
         ref={sheetRef}
         className={`fixed left-0 right-0 bg-panel border-t border-border-medium rounded-t-3xl shadow-2xl transition-all duration-500 ease-in-out z-50 ${
-          isExpanded ? 'max-h-[80vh]' : 'h-[20vh] min-h-[100px]'
+          isExpanded ? 'max-h-[80vh]' : 'h-auto min-h-[90px] max-h-[150px]'
         }`}
         style={{
           bottom: '0',
@@ -174,8 +174,8 @@ export function PersistentBottomSheet({
         </button>
 
         {/* Content */}
-        <div className={`overflow-y-auto px-5 pb-6 transition-opacity duration-300 ${isExpanded ? 'max-h-[calc(80vh-80px)] opacity-100' : 'max-h-0 opacity-0 overflow-hidden invisible'}`}>
-          {children}
+        <div className={`px-5 pb-6 transition-opacity duration-300 ${isExpanded ? 'overflow-y-auto max-h-[calc(80vh-80px)] opacity-100' : 'overflow-hidden opacity-100'}`}>
+          {typeof children === 'function' ? children(isExpanded) : children}
         </div>
       </div>
     </>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Search, Play, Circle, Check, Trash2, Sun, Moon, ChevronDown, ChevronRight, Calendar } from 'lucide-react';
+import { Search, Play, Circle, Check, Trash2, ChevronDown, ChevronRight, Calendar, MoreVertical, Settings, Square, CheckSquare2, ChevronLeft } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Input } from '../components/Input';
 import { Modal } from '../components/Modal';
@@ -7,6 +7,19 @@ import { Button } from '../components/Button';
 import { Workout } from '../types';
 import { formatDate, formatTimeAgo } from '../utils/storage';
 import { createHistoryIndex, formatBucketLabel, findWorkoutsByExercise, getAvailableTimePeriods, getBucketKey } from '../utils/historyIndex';
+
+/**
+ * Determine if a workout entry is a single exercise (exercise-only) entry.
+ * 
+ * Rule: A workout is considered "exercise-only" if:
+ * - It has exactly one exercise
+ * - The workout name matches the exercise name
+ * 
+ * This identifies standalone exercise logs vs. multi-exercise workout sessions.
+ */
+export function isExerciseOnlyEntry(workout: Workout): boolean {
+  return workout.exercises.length === 1 && workout.name === workout.exercises[0]?.name;
+}
 
 interface HistoryScreenProps {
   workouts: Workout[];
@@ -18,26 +31,28 @@ interface HistoryScreenProps {
   onViewWorkout: (workoutId: string) => void;
   onViewExerciseHistory: (exerciseName: string) => void;
   onStartWorkout: (workoutId: string) => void;
+  onStartExercise?: (exerciseName: string) => void;
   onDeleteWorkouts: (workoutIds: string[]) => void;
   onStateChange: (searchQuery: string, scrollPosition: number) => void;
+  onOpenSettings: () => void;
 }
 
 export function HistoryScreen({
   workouts,
   theme,
   onThemeChange,
+  onUnitChange,
   initialSearchQuery = '',
   initialScrollPosition = 0,
   onBack,
   onViewWorkout,
   onViewExerciseHistory,
   onStartWorkout,
+  onStartExercise,
   onDeleteWorkouts,
   onStateChange,
+  onOpenSettings,
 }: HistoryScreenProps) {
-  const toggleTheme = () => {
-    onThemeChange(theme === 'light' ? 'dark' : 'light');
-  };
   const [searchQuery, setSearchQuery] = useState(initialSearchQuery);
   const [filter, setFilter] = useState<'all' | 'workouts' | 'exercises'>('all');
   const [selectMode, setSelectMode] = useState(false);
@@ -45,8 +60,26 @@ export function HistoryScreen({
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [expandedBuckets, setExpandedBuckets] = useState<Set<string>>(new Set());
   const [showTimePicker, setShowTimePicker] = useState(false);
+  const [selectedMonth, setSelectedMonth] = useState<{ year: number; month: number } | null>(null);
+  const [modalSelectedYear, setModalSelectedYear] = useState<number | null>(null);
+  const [showYearDropdown, setShowYearDropdown] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isRestoringScroll = useRef(false);
+  const yearDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close year dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (yearDropdownRef.current && !yearDropdownRef.current.contains(event.target as Node)) {
+        setShowYearDropdown(false);
+      }
+    };
+
+    if (showYearDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showYearDropdown]);
 
   // Restore scroll position when initialScrollPosition changes
   useEffect(() => {
@@ -82,24 +115,65 @@ export function HistoryScreen({
     onStateChange(searchQuery, scrollPosition);
   };
 
-  // Filter workouts based on filter type
+  // Get available years from workouts
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    workouts.filter(w => w.isComplete).forEach(workout => {
+      const date = new Date(workout.endTime || workout.startTime);
+      years.add(date.getFullYear());
+    });
+    return Array.from(years).sort((a, b) => b - a); // Most recent first
+  }, [workouts]);
+
+  const hasMultipleYears = availableYears.length > 1;
+  const currentYear = selectedMonth?.year || availableYears[0] || new Date().getFullYear();
+
+  // Compute available months by year (for modal)
+  const availableMonthsByYear = useMemo(() => {
+    const monthsByYear = new Map<number, Set<number>>();
+    workouts.filter(w => w.isComplete).forEach(workout => {
+      const date = new Date(workout.endTime || workout.startTime);
+      const year = date.getFullYear();
+      const month = date.getMonth();
+      if (!monthsByYear.has(year)) {
+        monthsByYear.set(year, new Set());
+      }
+      monthsByYear.get(year)!.add(month);
+    });
+    return monthsByYear;
+  }, [workouts]);
+
+  // Get modal year (use modalSelectedYear if set, otherwise default to most recent year)
+  const modalYear = modalSelectedYear ?? availableYears[0] ?? new Date().getFullYear();
+
+  // Initialize modal year when opened
+  useEffect(() => {
+    if (showTimePicker && modalSelectedYear === null) {
+      setModalSelectedYear(availableYears[0] || new Date().getFullYear());
+    }
+  }, [showTimePicker, availableYears, modalSelectedYear]);
+
+  // Filter workouts based on filter type and month/year
   const filteredWorkouts = useMemo(() => {
-    if (filter === 'all') {
-      return workouts;
-    } else if (filter === 'workouts') {
-      // Exclude single exercises
-      return workouts.filter(w => {
-        const isSingleExercise = w.exercises.length === 1 && w.name === w.exercises[0]?.name;
-        return !isSingleExercise;
-      });
-    } else {
-      // Only single exercises
-      return workouts.filter(w => {
-        const isSingleExercise = w.exercises.length === 1 && w.name === w.exercises[0]?.name;
-        return isSingleExercise;
+    let result = workouts;
+    
+    // Apply type filter
+    if (filter === 'workouts') {
+      result = result.filter(w => !isExerciseOnlyEntry(w));
+    } else if (filter === 'exercises') {
+      result = result.filter(w => isExerciseOnlyEntry(w));
+    }
+    
+    // Apply month/year filter
+    if (selectedMonth) {
+      result = result.filter(workout => {
+        const date = new Date(workout.endTime || workout.startTime);
+        return date.getFullYear() === selectedMonth.year && date.getMonth() === selectedMonth.month;
       });
     }
-  }, [workouts, filter]);
+    
+    return result;
+  }, [workouts, filter, selectedMonth]);
 
   // Create time-bucketed history index with filtered workouts
   const historyIndex = useMemo(() => {
@@ -181,6 +255,48 @@ export function HistoryScreen({
     setSelectedIds(new Set());
   };
 
+  // Get all visible workout IDs based on current filters
+  const visibleWorkoutIds = useMemo(() => {
+    const allVisibleIds = new Set<string>();
+    const searchLower = searchQuery.toLowerCase();
+    
+    filteredWorkouts.forEach(workout => {
+      // Check if it matches search query if search is active
+      if (searchQuery.trim() === '' || 
+          workout.name.toLowerCase().includes(searchLower) ||
+          workout.exercises.some(ex => ex.name.toLowerCase().includes(searchLower))) {
+        allVisibleIds.add(workout.id);
+      }
+    });
+    
+    return allVisibleIds;
+  }, [filteredWorkouts, searchQuery]);
+
+  const allVisibleSelected = useMemo(() => {
+    return visibleWorkoutIds.size > 0 && Array.from(visibleWorkoutIds).every(id => selectedIds.has(id));
+  }, [visibleWorkoutIds, selectedIds]);
+
+  const handleSelectAll = () => {
+    if (allVisibleSelected) {
+      // Deselect all visible items
+      const newSelected = new Set(selectedIds);
+      visibleWorkoutIds.forEach(id => newSelected.delete(id));
+      setSelectedIds(newSelected);
+    } else {
+      // Select all visible items
+      const newSelected = new Set(selectedIds);
+      visibleWorkoutIds.forEach(id => newSelected.add(id));
+      setSelectedIds(newSelected);
+    }
+  };
+
+  // Clear selection when filter, search, or month filter changes (keep selection mode but clear selection)
+  useEffect(() => {
+    if (selectMode) {
+      setSelectedIds(new Set());
+    }
+  }, [filter, searchQuery, selectedMonth]);
+
   return (
     <div className="flex flex-col h-full">
       {selectMode && (
@@ -188,14 +304,24 @@ export function HistoryScreen({
           title={`${selectedIds.size} selected`}
           onBack={handleCancelSelect}
           rightAction={
-            <Button
-              size="sm"
-              variant="danger"
-              onClick={() => setShowDeleteModal(true)}
-              disabled={selectedIds.size === 0}
-            >
-              Delete
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="neutral"
+                onClick={handleSelectAll}
+                disabled={visibleWorkoutIds.size === 0}
+              >
+                {allVisibleSelected ? 'Deselect all' : 'Select all'}
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={() => setShowDeleteModal(true)}
+                disabled={selectedIds.size === 0}
+              >
+                Delete
+              </Button>
+            </div>
           }
         />
       )}
@@ -209,18 +335,26 @@ export function HistoryScreen({
                 <h1 className="text-3xl mb-2">History</h1>
               </div>
               
-              {/* Theme Toggle */}
-              <button
-                onClick={toggleTheme}
-                className="p-2 -mr-2 rounded-xl hover:bg-panel transition-colors"
-                aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
-              >
-                {theme === 'light' ? (
-                  <Moon className="w-5 h-5 text-text-muted" />
-                ) : (
-                  <Sun className="w-5 h-5 text-text-muted" />
-                )}
-              </button>
+              <div className="flex items-center gap-2">
+                {/* Select button */}
+                <button
+                  onClick={() => setSelectMode(true)}
+                  className="p-2 rounded-xl hover:bg-panel transition-colors text-text-muted hover:text-text-primary"
+                  title="Select items"
+                >
+                  <CheckSquare2 className="w-5 h-5" />
+                </button>
+                
+                {/* Settings Button */}
+                <button
+                  onClick={onOpenSettings}
+                  className="p-2 rounded-xl hover:bg-panel transition-colors text-text-muted hover:text-text-primary"
+                  aria-label="Settings"
+                  title="Settings"
+                >
+                  <Settings className="w-5 h-5" />
+                </button>
+              </div>
             </div>
           )}
 
@@ -275,7 +409,7 @@ export function HistoryScreen({
                       : 'bg-surface text-text-muted hover:bg-surface-secondary'
                   }`}
                 >
-                  Exercises
+                  Exercise only
                 </button>
               </div>
             </div>
@@ -302,12 +436,24 @@ export function HistoryScreen({
                       {formatDate(workout.endTime || workout.startTime)} · {formatTimeAgo(workout.endTime || workout.startTime)} · {workout.exercises.length} {workout.exercises.length === 1 ? 'exercise' : 'exercises'}
                     </p>
                   </div>
-                  <button
-                    onClick={() => onStartWorkout(workout.id)}
-                    className="p-2 rounded-lg hover:bg-accent-muted text-accent transition-colors flex-shrink-0"
-                  >
-                    <Play className="w-5 h-5" />
-                  </button>
+                  {(() => {
+                    const isExerciseOnly = isExerciseOnlyEntry(workout);
+                    return (
+                      <button
+                        onClick={() => {
+                          if (isExerciseOnly && onStartExercise) {
+                            onStartExercise(workout.exercises[0].name);
+                          } else {
+                            onStartWorkout(workout.id);
+                          }
+                        }}
+                        className="p-2 rounded-lg hover:bg-accent-muted text-accent transition-colors flex-shrink-0"
+                        title={isExerciseOnly ? "Repeat exercise" : "Repeat workout"}
+                      >
+                        <Play className="w-5 h-5" />
+                      </button>
+                    );
+                  })()}
                 </div>
               ))}
             </div>
@@ -317,7 +463,11 @@ export function HistoryScreen({
               {historyIndex.buckets.length === 0 ? (
                 <div className="text-center py-12">
                   <p className="text-text-muted">
-                    {searchQuery ? 'No workouts found' : 'No workouts yet'}
+                    {searchQuery 
+                      ? 'No workouts found' 
+                      : filter === 'exercises' 
+                        ? 'No single exercises logged yet' 
+                        : 'No workouts yet'}
                   </p>
                 </div>
               ) : (
@@ -365,51 +515,61 @@ export function HistoryScreen({
                               return (
                                 <div
                                   key={workout.id}
-                                  className="flex items-center gap-4 py-4 pl-6 hover:bg-panel/50 transition-colors"
+                                  className={`flex items-center gap-4 py-4 pl-6 hover:bg-panel/50 transition-colors ${
+                                    selectMode ? 'cursor-pointer' : ''
+                                  }`}
+                                  onClick={() => {
+                                    if (selectMode) {
+                                      handleToggleSelect(workout.id);
+                                    } else {
+                                      captureScrollPosition();
+                                      onViewWorkout(workout.id);
+                                    }
+                                  }}
+                                  onContextMenu={(e) => {
+                                    e.preventDefault();
+                                    setSelectMode(true);
+                                    handleToggleSelect(workout.id);
+                                  }}
                                 >
                                   {selectMode && (
-                                    <button
-                                      onClick={() => handleToggleSelect(workout.id)}
-                                      className="flex-shrink-0"
-                                    >
+                                    <div className="flex-shrink-0">
                                       {selectedIds.has(workout.id) ? (
-                                        <div className="w-6 h-6 rounded-full bg-accent flex items-center justify-center">
+                                        <div className="w-6 h-6 rounded-md bg-accent flex items-center justify-center border border-accent">
                                           <Check className="w-4 h-4 text-white" />
                                         </div>
                                       ) : (
-                                        <Circle className="w-6 h-6 text-border-medium" />
+                                        <div className="w-6 h-6 rounded-md border-2 border-border-medium flex items-center justify-center bg-transparent" />
                                       )}
-                                    </button>
+                                    </div>
                                   )}
 
-                                  <div
-                                    className="flex-1 min-w-0 cursor-pointer"
-                                    onClick={() => {
-                                      if (!selectMode) {
-                                        captureScrollPosition();
-                                        onViewWorkout(workout.id);
-                                      }
-                                    }}
-                                    onContextMenu={(e) => {
-                                      e.preventDefault();
-                                      setSelectMode(true);
-                                      handleToggleSelect(workout.id);
-                                    }}
-                                  >
+                                  <div className="flex-1 min-w-0">
                                     <h3 className="mb-1 truncate">{workout.name}</h3>
                                     <p className="text-text-muted text-sm">
                                       {formatDate(workout.endTime || workout.startTime)} · {formatTimeAgo(workout.endTime || workout.startTime)} · {workout.exercises.length} {workout.exercises.length === 1 ? 'exercise' : 'exercises'}
                                     </p>
                                   </div>
 
-                                  {!selectMode && (
-                                    <button
-                                      onClick={() => onStartWorkout(workout.id)}
-                                      className="p-2 rounded-lg hover:bg-accent-muted text-accent transition-colors flex-shrink-0"
-                                    >
-                                      <Play className="w-5 h-5" />
-                                    </button>
-                                  )}
+                                  {!selectMode && (() => {
+                                    const isExerciseOnly = isExerciseOnlyEntry(workout);
+                                    return (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          if (isExerciseOnly && onStartExercise) {
+                                            onStartExercise(workout.exercises[0].name);
+                                          } else {
+                                            onStartWorkout(workout.id);
+                                          }
+                                        }}
+                                        className="p-2 rounded-lg border border-border-medium hover:bg-panel text-text-muted hover:text-text-primary transition-colors flex-shrink-0"
+                                        title={isExerciseOnly ? "Repeat exercise" : "Repeat workout"}
+                                      >
+                                        <Play className="w-5 h-5" />
+                                      </button>
+                                    );
+                                  })()}
                                 </div>
                               );
                             })}
@@ -428,7 +588,7 @@ export function HistoryScreen({
       <Modal
         isOpen={showDeleteModal}
         onClose={() => setShowDeleteModal(false)}
-        title="Delete workouts"
+        title="Delete selected?"
         actions={
           <>
             <Button variant="neutral" onClick={() => setShowDeleteModal(false)} className="flex-1">
@@ -441,60 +601,149 @@ export function HistoryScreen({
         }
       >
         <p className="text-text-muted">
-          Are you sure you want to delete {selectedIds.size} {selectedIds.size === 1 ? 'workout' : 'workouts'}? This cannot be undone.
+          This will delete {selectedIds.size} {selectedIds.size === 1 ? 'item' : 'items'}.
         </p>
       </Modal>
 
       {/* Time Navigation Modal */}
       <Modal
         isOpen={showTimePicker}
-        onClose={() => setShowTimePicker(false)}
-        title="Jump to month"
+        onClose={() => {
+          setShowTimePicker(false);
+          setModalSelectedYear(null);
+          setShowYearDropdown(false);
+        }}
+        title="Jump to date"
       >
-        <div className="space-y-3 max-h-[60vh] overflow-y-auto">
-          {getAvailableTimePeriods(filteredWorkouts).map(({ year, month }) => {
-            const monthNames = [
-              'January', 'February', 'March', 'April', 'May', 'June',
-              'July', 'August', 'September', 'October', 'November', 'December'
-            ];
-            const bucketKey = `month-${year}-${month}`;
-            const isExpanded = expandedBuckets.has(bucketKey);
-            const monthBucket = historyIndex.buckets.find(b => getBucketKey(b.bucket) === bucketKey);
-
-            return (
+        <div className="space-y-4">
+          {/* Year Controls (only if multiple years) */}
+          {hasMultipleYears && (
+            <div className="relative flex items-center justify-center gap-2" ref={yearDropdownRef}>
               <button
-                key={`${year}-${month}`}
                 onClick={() => {
-                  if (!isExpanded) {
-                    toggleBucket(bucketKey);
+                  // availableYears is sorted descending (most recent first)
+                  // Left arrow = past = smaller year = higher index in descending array
+                  const currentIndex = availableYears.indexOf(modalYear);
+                  if (currentIndex < availableYears.length - 1) {
+                    setModalSelectedYear(availableYears[currentIndex + 1]);
                   }
-                  setShowTimePicker(false);
-                  // Scroll to bucket after a short delay
-                  setTimeout(() => {
-                    const element = document.querySelector(`[data-bucket-key="${bucketKey}"]`);
-                    element?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                  }, 100);
                 }}
-                className="w-full text-left p-3 rounded-lg hover:bg-surface transition-colors"
+                disabled={availableYears.indexOf(modalYear) >= availableYears.length - 1}
+                className="p-1.5 rounded-lg border border-border-medium hover:bg-surface disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                aria-label="Previous year"
               >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium">
-                      {monthNames[month]} {year}
-                    </p>
-                    {monthBucket && (
-                      <p className="text-sm text-text-muted">
-                        {monthBucket.workouts.length} {monthBucket.workouts.length === 1 ? 'workout' : 'workouts'}
-                      </p>
-                    )}
-                  </div>
-                  {isExpanded && (
-                    <ChevronDown className="w-4 h-4 text-text-muted" />
-                  )}
-                </div>
+                <ChevronLeft className="w-4 h-4" />
               </button>
-            );
-          })}
+              <div className="relative">
+                <button
+                  onClick={() => setShowYearDropdown(!showYearDropdown)}
+                  className="px-4 py-1.5 rounded-lg border border-border-medium bg-surface hover:bg-surface-secondary transition-colors text-sm font-medium"
+                >
+                  {modalYear}
+                </button>
+                {showYearDropdown && (
+                  <div className="absolute top-full left-0 mt-2 bg-surface border border-border-medium rounded-lg shadow-lg max-h-48 overflow-y-auto z-50 min-w-[100px]">
+                    {availableYears.map(year => (
+                      <button
+                        key={year}
+                        onClick={() => {
+                          setModalSelectedYear(year);
+                          setShowYearDropdown(false);
+                        }}
+                        className={`w-full px-4 py-2 text-left text-sm hover:bg-surface-secondary transition-colors ${
+                          year === modalYear ? 'bg-accent/10 text-accent font-medium' : ''
+                        }`}
+                      >
+                        {year}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => {
+                  // availableYears is sorted descending (most recent first)
+                  // Right arrow = future = larger year = lower index in descending array
+                  const currentIndex = availableYears.indexOf(modalYear);
+                  if (currentIndex > 0) {
+                    setModalSelectedYear(availableYears[currentIndex - 1]);
+                  }
+                }}
+                disabled={availableYears.indexOf(modalYear) <= 0}
+                className="p-1.5 rounded-lg border border-border-medium hover:bg-surface disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                aria-label="Next year"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* Month Grid */}
+          <div className="grid grid-cols-3 gap-2">
+            {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((monthLabel, monthIndex) => {
+              const availableMonths = availableMonthsByYear.get(modalYear) || new Set<number>();
+              const hasData = availableMonths.has(monthIndex);
+              const isSelected = selectedMonth?.year === modalYear && selectedMonth?.month === monthIndex;
+              const monthNames = [
+                'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'
+              ];
+
+              return (
+                <button
+                  key={monthIndex}
+                  onClick={() => {
+                    if (hasData) {
+                      const bucketKey = `month-${modalYear}-${monthIndex}`;
+                      // Ensure the selected month bucket is expanded
+                      setExpandedBuckets(prev => {
+                        const next = new Set(prev);
+                        next.add(bucketKey);
+                        return next;
+                      });
+                      setSelectedMonth({ year: modalYear, month: monthIndex });
+                      setShowTimePicker(false);
+                      setModalSelectedYear(null);
+                      setShowYearDropdown(false);
+                      // Scroll to the bucket after a short delay
+                      setTimeout(() => {
+                        const element = document.querySelector(`[data-bucket-key="${bucketKey}"]`);
+                        if (element) {
+                          element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
+                      }, 100);
+                    }
+                  }}
+                  disabled={!hasData}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    isSelected
+                      ? 'bg-accent text-white'
+                      : hasData
+                      ? 'bg-surface text-text-muted hover:bg-surface-secondary'
+                      : 'bg-surface/30 text-text-muted/40 cursor-not-allowed opacity-50'
+                  }`}
+                  aria-label={hasData ? `${monthNames[monthIndex]} ${modalYear}` : `${monthNames[monthIndex]} ${modalYear} (no data)`}
+                  aria-disabled={!hasData}
+                >
+                  {monthLabel}
+                </button>
+              );
+            })}
+          </div>
+
+          {selectedMonth && (
+            <button
+              onClick={() => {
+                setSelectedMonth(null);
+                setShowTimePicker(false);
+                setModalSelectedYear(null);
+                setShowYearDropdown(false);
+              }}
+              className="w-full text-sm text-text-muted hover:text-text-primary transition-colors py-2"
+            >
+              Clear filter
+            </button>
+          )}
         </div>
       </Modal>
 

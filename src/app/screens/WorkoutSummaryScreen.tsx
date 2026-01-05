@@ -1,9 +1,12 @@
-import { Play, Edit2 } from 'lucide-react';
+import { useState } from 'react';
+import { Play, Edit2, Trash2 } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
+import { Modal } from '../components/Modal';
 import { Workout } from '../types';
 import { formatDate } from '../utils/storage';
+import { formatWeight } from '../../utils/weightFormat';
 
 interface WorkoutSummaryScreenProps {
   workout: Workout;
@@ -14,6 +17,7 @@ interface WorkoutSummaryScreenProps {
   onAddAnother?: () => void;
   onEditExercise?: (exerciseId: string) => void;
   onViewExerciseHistory?: (exerciseName: string) => void;
+  onDelete?: () => void;
 }
 
 export function WorkoutSummaryScreen({
@@ -25,10 +29,35 @@ export function WorkoutSummaryScreen({
   onAddAnother,
   onEditExercise,
   onViewExerciseHistory,
+  onDelete,
 }: WorkoutSummaryScreenProps) {
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+
+  const handleDelete = () => {
+    if (onDelete) {
+      onDelete();
+      setShowDeleteModal(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full">
-      <TopBar title="Summary" onBack={onBack} />
+      <TopBar 
+        title="Summary" 
+        onBack={onBack}
+        rightAction={
+          onDelete ? (
+            <button
+              onClick={() => setShowDeleteModal(true)}
+              className="p-2 rounded-lg hover:bg-surface transition-colors text-text-muted hover:text-danger"
+              aria-label="Delete entry"
+              title="Delete entry"
+            >
+              <Trash2 className="w-5 h-5" />
+            </button>
+          ) : undefined
+        }
+      />
 
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto p-5 space-y-6">
@@ -78,17 +107,9 @@ export function WorkoutSummaryScreen({
                       >
                         <span className="text-text-muted">Set {index + 1}</span>
                         <div className="flex items-center gap-2">
-                          <span>{set.weight} kg</span>
+                          <span>{formatWeight(set.weight)}</span>
                           <span className="text-text-muted">×</span>
                           <span>{set.reps} reps</span>
-                          {set.restDuration !== undefined && set.restDuration > 0 && (
-                            <>
-                              <span className="text-text-muted/40">·</span>
-                              <span className="text-text-muted/60 text-sm tabular-nums">
-                                {Math.floor(set.restDuration / 60)}:{(set.restDuration % 60).toString().padStart(2, '0')} rest
-                              </span>
-                            </>
-                          )}
                         </div>
                       </div>
                     ))}
@@ -98,11 +119,11 @@ export function WorkoutSummaryScreen({
                   <div className="flex gap-4 mb-4 text-text-muted">
                     <div>
                       <span className="text-xs uppercase tracking-wide">Total Volume</span>
-                      <p className="text-text-primary">{totalVolume.toFixed(0)} kg</p>
+                      <p className="text-text-primary">{formatWeight(totalVolume, 0)}</p>
                     </div>
                     <div>
                       <span className="text-xs uppercase tracking-wide">Avg Weight</span>
-                      <p className="text-text-primary">{avgWeight.toFixed(1)} kg</p>
+                      <p className="text-text-primary">{formatWeight(avgWeight)}</p>
                     </div>
                   </div>
 
@@ -116,7 +137,7 @@ export function WorkoutSummaryScreen({
             {!isJustCompleted && onStartAgain && (
               <Button variant="primary" onClick={onStartAgain} className="w-full">
                 <Play className="w-4 h-4 mr-2 inline" />
-                {isSingleExercise ? 'Repeat Exercise' : 'Repeat Workout'}
+                {isSingleExercise ? 'Repeat exercise' : 'Repeat workout'}
               </Button>
             )}
             {isJustCompleted && (
@@ -127,6 +148,27 @@ export function WorkoutSummaryScreen({
           </div>
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      <Modal
+        isOpen={showDeleteModal}
+        onClose={() => setShowDeleteModal(false)}
+        title="Delete entry?"
+        actions={
+          <>
+            <Button variant="neutral" onClick={() => setShowDeleteModal(false)} className="flex-1">
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={handleDelete} className="flex-1">
+              Delete
+            </Button>
+          </>
+        }
+      >
+        <p className="text-text-muted">
+          This will permanently delete this record.
+        </p>
+      </Modal>
     </div>
   );
 }
