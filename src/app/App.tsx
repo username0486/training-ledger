@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Dumbbell, Edit2, List } from 'lucide-react';
 import { HomeScreen } from './screens/HomeScreen';
 import { CreateWorkoutScreen } from './screens/CreateWorkoutScreen';
@@ -13,6 +13,7 @@ import { Banner } from './components/Banner';
 import { Modal } from './components/Modal';
 import { ExerciseSearchBottomSheet } from './components/ExerciseSearchBottomSheet';
 import { LogExerciseSearch } from './components/LogExerciseSearch';
+import { ExerciseSearchHandle } from './components/ExerciseSearch';
 import { SessionConflictModal } from './components/SessionConflictModal';
 import { Input } from './components/Input';
 import { Button } from './components/Button';
@@ -54,6 +55,7 @@ export default function App() {
   // Load preferences on mount
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [unitChangeKey, setUnitChangeKey] = useState(0); // Trigger re-renders when units change
+  const logExerciseSearchRef = useRef<ExerciseSearchHandle>(null);
   
   const handleUnitChange = () => {
     setUnitChangeKey(prev => prev + 1);
@@ -1456,8 +1458,10 @@ export default function App() {
           setExerciseName('');
         }}
         title="Log Exercise"
+        onScrollStart={() => logExerciseSearchRef.current?.blur()}
       >
         <LogExerciseSearch
+          ref={logExerciseSearchRef}
           onSelectExercise={handleLogExerciseFromModal}
           onAddNewExercise={handleAddNewExerciseFromModal}
         />

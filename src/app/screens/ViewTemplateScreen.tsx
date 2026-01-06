@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Play, GripVertical, Pencil, Trash2, X, Plus, Check } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Card } from '../components/Card';
@@ -6,7 +6,7 @@ import { Button } from '../components/Button';
 import { WorkoutTemplate } from '../types/templates';
 import { formatTimeAgo } from '../utils/storage';
 import { ExerciseSearchBottomSheet } from '../components/ExerciseSearchBottomSheet';
-import { ExerciseSearch } from '../components/ExerciseSearch';
+import { ExerciseSearch, ExerciseSearchHandle } from '../components/ExerciseSearch';
 import { addExerciseToDb } from '../utils/exerciseDb';
 import { FloatingLabelInput } from '../components/FloatingLabelInput';
 import { Dumbbell } from 'lucide-react';
@@ -82,6 +82,8 @@ export function ViewTemplateScreen({
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [showReplaceExercise, setShowReplaceExercise] = useState(false);
   const [replaceIndex, setReplaceIndex] = useState<number | null>(null);
+  const addExerciseSearchRef = useRef<ExerciseSearchHandle>(null);
+  const replaceExerciseSearchRef = useRef<ExerciseSearchHandle>(null);
 
   // Reset edited values only when template changes (preserve edits when toggling edit mode)
   useEffect(() => {
@@ -429,8 +431,10 @@ export function ViewTemplateScreen({
         isOpen={showAddExercise}
         onClose={() => setShowAddExercise(false)}
         title="Add Exercise"
+        onScrollStart={() => addExerciseSearchRef.current?.blur()}
       >
         <ExerciseSearch
+          ref={addExerciseSearchRef}
           onSelectExercise={handleAddExercise}
           onAddNewExercise={handleAddNewExercise}
           selectedExercises={editedExercises}
@@ -449,8 +453,10 @@ export function ViewTemplateScreen({
           setReplaceIndex(null);
         }}
         title="Replace Exercise"
+        onScrollStart={() => replaceExerciseSearchRef.current?.blur()}
       >
         <ExerciseSearch
+          ref={replaceExerciseSearchRef}
           onSelectExercise={handleReplaceSelect}
           onAddNewExercise={(name) => {
             handleReplaceSelect(name);
