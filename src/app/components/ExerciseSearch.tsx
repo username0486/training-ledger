@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import { ExerciseSearchInput } from './ExerciseSearchInput';
 import { ExerciseList } from './ExerciseList';
 import { Button } from './Button';
@@ -12,6 +12,10 @@ import { learnAlias, initializeAliasesForExercise } from '../../utils/exerciseAl
 import { findLikelyReplacements } from '../../utils/exerciseSimilarity';
 import { getSwapScore, getReplacementHistory } from '../../utils/exerciseSwapHistory';
 import { AnyExercise } from '../../utils/exerciseDb/types';
+
+export interface ExerciseSearchHandle {
+  blur: () => void;
+}
 
 interface ExerciseSearchProps {
   onSelectExercise: (exerciseName: string) => void;
@@ -32,7 +36,7 @@ interface ExerciseSearchProps {
  * - Workout creation search
  * - Workout session "Add exercise" search
  */
-export function ExerciseSearch({
+export const ExerciseSearch = forwardRef<ExerciseSearchHandle, ExerciseSearchProps>(({
   onSelectExercise,
   onAddNewExercise,
   selectedExercises = [],
@@ -41,9 +45,17 @@ export function ExerciseSearch({
   showDetails = true,
   createButtonLabel = 'Create & start',
   swapContext,
-}: ExerciseSearchProps) {
+}, ref) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [allExercises, setAllExercises] = useState<ExerciseDBEntry[]>([]);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Expose blur method to parent
+  useImperativeHandle(ref, () => ({
+    blur: () => {
+      inputRef.current?.blur();
+    },
+  }));
 
   // Load all exercises on mount
   useEffect(() => {
@@ -228,6 +240,7 @@ export function ExerciseSearch({
       {/* Search input - sticky when scrolling */}
       <div className="sticky top-0 z-10 bg-panel pb-3" style={{ marginLeft: '-1.5rem', marginRight: '-1.5rem', paddingLeft: '1.5rem', paddingRight: '1.5rem' }}>
         <ExerciseSearchInput
+          ref={inputRef}
           value={searchTerm}
           onChange={setSearchTerm}
           placeholder={placeholder}
@@ -372,5 +385,7 @@ export function ExerciseSearch({
       )}
     </div>
   );
-}
+});
+
+ExerciseSearch.displayName = 'ExerciseSearch';
 

@@ -9,7 +9,7 @@ import { Pill } from '../components/Pill';
 import { PersistentBottomSheet } from '../components/PersistentBottomSheet';
 import { Exercise, Set, Workout } from '../types';
 import { formatRelativeTime, getRecentSessionsForExercise } from '../utils/storage';
-import { ExerciseSearch } from '../components/ExerciseSearch';
+import { ExerciseSearch, ExerciseSearchHandle } from '../components/ExerciseSearch';
 import { getAllExercisesList } from '../../utils/exerciseDb';
 import { formatWeight } from '../../utils/weightFormat';
 import {
@@ -66,6 +66,8 @@ export function WorkoutSessionScreen({
   const [exerciseListTab, setExerciseListTab] = useState<'upcoming' | 'completed'>('upcoming');
   const [animateCompleted, setAnimateCompleted] = useState(false);
   const previousCompletedCountRef = useRef(0);
+  const addExerciseSearchRef = useRef<ExerciseSearchHandle>(null);
+  const swapExerciseSearchRef = useRef<ExerciseSearchHandle>(null);
 
   // Focus State
   const [progressionExerciseId, setProgressionExerciseId] = useState<string | null>(() => {
@@ -796,8 +798,10 @@ export function WorkoutSessionScreen({
           setShowAddExercise(false);
         }}
         title="Add Exercise"
+        onScrollStart={() => addExerciseSearchRef.current?.blur()}
       >
         <ExerciseSearch
+          ref={addExerciseSearchRef}
           onSelectExercise={handleAddExerciseFromModal}
           onAddNewExercise={handleAddNewExercise}
           placeholder="Search exercises..."
@@ -869,8 +873,10 @@ export function WorkoutSessionScreen({
           isOpen={showSwapExercise}
           onClose={() => setShowSwapExercise(false)}
           title={`Swap "${focusExercise.name}"`}
+          onScrollStart={() => swapExerciseSearchRef.current?.blur()}
         >
           <ExerciseSearch
+            ref={swapExerciseSearchRef}
             onSelectExercise={(exerciseName) => {
               handleSwapExercise(exerciseName);
             }}

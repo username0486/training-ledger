@@ -6,6 +6,7 @@ interface ExerciseSearchBottomSheetProps {
   onClose: () => void;
   title: string;
   children: ReactNode;
+  onScrollStart?: () => void; // Callback to dismiss keyboard
 }
 
 export function ExerciseSearchBottomSheet({
@@ -13,19 +14,22 @@ export function ExerciseSearchBottomSheet({
   onClose,
   title,
   children,
+  onScrollStart,
 }: ExerciseSearchBottomSheetProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [startY, setStartY] = useState(0);
   const [currentY, setCurrentY] = useState(0);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const sheetRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  const handleTouchStart = (e: React.TouchEvent) => {
+  const handleDragTouchStart = (e: React.TouchEvent) => {
     setIsDragging(true);
     setStartY(e.touches[0].clientY);
     setCurrentY(e.touches[0].clientY);
   };
 
-  const handleTouchMove = (e: React.TouchEvent) => {
+  const handleDragTouchMove = (e: React.TouchEvent) => {
     if (!isDragging) return;
     setCurrentY(e.touches[0].clientY);
   };
@@ -34,7 +38,7 @@ export function ExerciseSearchBottomSheet({
     onClose();
   };
 
-  const handleTouchEnd = () => {
+  const handleDragTouchEnd = () => {
     if (!isDragging) return;
     setIsDragging(false);
 
@@ -98,6 +102,83 @@ export function ExerciseSearchBottomSheet({
     };
   }, [isOpen]);
 
+  // Handle keyboard visibility and height for mobile
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const updateKeyboardHeight = () => {
+      // Use Visual Viewport API if available (modern mobile browsers)
+      if (window.visualViewport) {
+        const viewportHeight = window.visualViewport.height;
+        const windowHeight = window.innerHeight;
+        const heightDiff = windowHeight - viewportHeight;
+        // Only consider it a keyboard if the difference is significant (>150px)
+        setKeyboardHeight(heightDiff > 150 ? heightDiff : 0);
+      } else {
+        // Fallback: detect keyboard via window resize (less reliable)
+        const initialHeight = window.innerHeight;
+        const handleResize = () => {
+          const currentHeight = window.innerHeight;
+          const heightDiff = initialHeight - currentHeight;
+          setKeyboardHeight(heightDiff > 150 ? heightDiff : 0);
+        };
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+      }
+    };
+
+    // Initial check
+    updateKeyboardHeight();
+
+    // Listen to visual viewport changes (mobile keyboards)
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', updateKeyboardHeight);
+      return () => {
+        window.visualViewport?.removeEventListener('resize', updateKeyboardHeight);
+      };
+    }
+  }, [isOpen]);
+
+  // Handle scroll events to dismiss keyboard
+  const handleScrollStart = () => {
+    if (onScrollStart) {
+      onScrollStart();
+    }
+  };
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    // Dismiss keyboard when user starts scrolling
+    if (e.currentTarget.scrollTop > 0 && onScrollStart) {
+      handleScrollStart();
+    }
+  };
+
+  const handleScrollTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    // Track if this is a scroll gesture vs tap
+    const touch = e.touches[0];
+    const startScrollTop = scrollContainerRef.current?.scrollTop || 0;
+    
+    const handleScrollTouchMove = (moveEvent: TouchEvent) => {
+      const moveTouch = moveEvent.touches[0];
+      const deltaY = Math.abs(moveTouch.clientY - touch.clientY);
+      
+      // If user is dragging/scrolling (not just tapping), dismiss keyboard
+      if (deltaY > 5) {
+        handleScrollStart();
+        document.removeEventListener('touchmove', handleScrollTouchMove);
+      }
+    };
+
+    document.addEventListener('touchmove', handleScrollTouchMove, { passive: true });
+    
+    // Clean up after touch ends
+    const handleScrollTouchEnd = () => {
+      document.removeEventListener('touchmove', handleScrollTouchMove);
+      document.removeEventListener('touchend', handleScrollTouchEnd);
+    };
+    document.addEventListener('touchend', handleScrollTouchEnd, { once: true });
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -120,9 +201,9 @@ export function ExerciseSearchBottomSheet({
       >
         {/* Drag handle */}
         <div className="w-full py-3 flex flex-col items-center cursor-grab active:cursor-grabbing touch-none select-none"
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
+          onTouchStart={handleDragTouchStart}
+          onTouchMove={handleDragTouchMove}
+          onTouchEnd={handleDragTouchEnd}
           onMouseDown={handleMouseDown}
         >
           <div className="w-10 h-1 bg-border-medium rounded-full" />
@@ -141,7 +222,15 @@ export function ExerciseSearchBottomSheet({
         </div>
 
         {/* Content - scrollable area */}
-        <div className="flex-1 overflow-y-auto min-h-0">
+        <div 
+          ref={scrollContainerRef}
+          className="flex-1 overflow-y-auto min-h-0"
+          onScroll={handleScroll}
+          onTouchStart={handleScrollTouchStart}
+          style={{
+            paddingBottom: keyboardHeight > 0 ? `${keyboardHeight}px` : undefined,
+          }}
+        >
           <div className="p-6 pb-6">
             {children}
           </div>

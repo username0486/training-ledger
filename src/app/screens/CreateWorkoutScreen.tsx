@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Plus, Trash2, GripVertical, Dumbbell, Search } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { FloatingLabelInput } from '../components/FloatingLabelInput';
 import { ExerciseSearchBottomSheet } from '../components/ExerciseSearchBottomSheet';
-import { ExerciseSearch } from '../components/ExerciseSearch';
+import { ExerciseSearch, ExerciseSearchHandle } from '../components/ExerciseSearch';
 import { addExerciseToDb } from '../utils/exerciseDb';
 
 interface CreateWorkoutScreenProps {
@@ -28,6 +28,7 @@ export function CreateWorkoutScreen({
   const [touchStartY, setTouchStartY] = useState<number | null>(null);
   const [touchStartIndex, setTouchStartIndex] = useState<number | null>(null);
   const [isDraggingFromHandle, setIsDraggingFromHandle] = useState(false);
+  const addExerciseSearchRef = useRef<ExerciseSearchHandle>(null);
 
   const handleAddExercise = (name: string) => {
     if (name.trim() && !exercises.includes(name.trim())) {
@@ -249,8 +250,10 @@ export function CreateWorkoutScreen({
           setShowAddExercise(false);
         }}
         title="Add Exercise"
+        onScrollStart={() => addExerciseSearchRef.current?.blur()}
       >
         <ExerciseSearch
+          ref={addExerciseSearchRef}
           onSelectExercise={handleAddExercise}
           onAddNewExercise={handleAddNewExercise}
           selectedExercises={exercises}
