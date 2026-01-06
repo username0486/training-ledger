@@ -181,6 +181,7 @@ export function HistoryScreen({
   }, [filteredWorkouts]);
 
   // Initialize expanded buckets with defaults from historyIndex when filter or buckets change
+  // Preserve manually expanded buckets (e.g., from jump to date)
   useEffect(() => {
     const defaultExpanded = new Set<string>();
     historyIndex.buckets.forEach(bucket => {
@@ -188,8 +189,34 @@ export function HistoryScreen({
         defaultExpanded.add(getBucketKey(bucket.bucket));
       }
     });
-    setExpandedBuckets(defaultExpanded);
+    
+    // Preserve any manually expanded buckets that still exist in the new historyIndex
+    setExpandedBuckets(prev => {
+      const preserved = new Set(defaultExpanded);
+      prev.forEach(bucketKey => {
+        // Only preserve if this bucket still exists in the current historyIndex
+        if (historyIndex.buckets.some(b => getBucketKey(b.bucket) === bucketKey)) {
+          preserved.add(bucketKey);
+        }
+      });
+      return preserved;
+    });
   }, [historyIndex.buckets, filter]);
+  
+  // When selectedMonth changes, ensure the corresponding bucket is expanded
+  useEffect(() => {
+    if (selectedMonth) {
+      const bucketKey = `month-${selectedMonth.year}-${selectedMonth.month}`;
+      setExpandedBuckets(prev => {
+        if (prev.has(bucketKey)) {
+          return prev; // Already expanded
+        }
+        const next = new Set(prev);
+        next.add(bucketKey);
+        return next;
+      });
+    }
+  }, [selectedMonth]);
 
   // Toggle bucket expansion
   const toggleBucket = (bucketKey: string) => {

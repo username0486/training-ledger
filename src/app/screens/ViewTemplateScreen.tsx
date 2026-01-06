@@ -10,6 +10,7 @@ import { ExerciseSearch } from '../components/ExerciseSearch';
 import { addExerciseToDb } from '../utils/exerciseDb';
 import { FloatingLabelInput } from '../components/FloatingLabelInput';
 import { Dumbbell } from 'lucide-react';
+import { formatWeight } from '../../utils/weightFormat';
 
 interface ViewTemplateScreenProps {
   template: WorkoutTemplate;
@@ -30,20 +31,65 @@ export function ViewTemplateScreen({
   onDelete,
   onSave,
 }: ViewTemplateScreenProps) {
+  // Defensive: Handle missing or invalid template
+  if (!template) {
+    if (import.meta.env.DEV) {
+      console.error('[ViewTemplateScreen] Template prop is null or undefined');
+    }
+    return (
+      <div className="flex flex-col h-full items-center justify-center p-5">
+        <div className="text-center space-y-4 max-w-md">
+          <h2 className="text-xl font-semibold">Workout not found</h2>
+          <p className="text-text-muted">
+            The workout data is missing or invalid.
+          </p>
+          <Button variant="primary" onClick={onBack}>
+            Back
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // Defensive: Ensure template has required properties
+  if (!template.exerciseNames || !Array.isArray(template.exerciseNames)) {
+    if (import.meta.env.DEV) {
+      console.error('[ViewTemplateScreen] Template has invalid exerciseNames:', template);
+    }
+    return (
+      <div className="flex flex-col h-full items-center justify-center p-5">
+        <div className="text-center space-y-4 max-w-md">
+          <h2 className="text-xl font-semibold">Invalid workout data</h2>
+          <p className="text-text-muted">
+            The workout exercises data is invalid or corrupted.
+          </p>
+          <Button variant="primary" onClick={onBack}>
+            Back
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
-  const [editedName, setEditedName] = useState<string>(template.name);
-  const [editedExercises, setEditedExercises] = useState<string[]>(template.exerciseNames);
+  const [editedName, setEditedName] = useState<string>(template.name || '');
+  const [editedExercises, setEditedExercises] = useState<string[]>(template.exerciseNames || []);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [touchStartY, setTouchStartY] = useState<number | null>(null);
+  const [touchStartIndex, setTouchStartIndex] = useState<number | null>(null);
+  const [isDraggingFromHandle, setIsDraggingFromHandle] = useState(false);
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [showReplaceExercise, setShowReplaceExercise] = useState(false);
   const [replaceIndex, setReplaceIndex] = useState<number | null>(null);
 
   // Reset edited values only when template changes (preserve edits when toggling edit mode)
   useEffect(() => {
-    setEditedName(template.name);
-    setEditedExercises([...template.exerciseNames]);
-  }, [template.id]);
+    if (template) {
+      setEditedName(template.name || '');
+      setEditedExercises([...(template.exerciseNames || [])]);
+    }
+  }, [template?.id]);
 
   const handleDone = () => {
     // Save changes if onSave callback is provided
@@ -54,8 +100,10 @@ export function ViewTemplateScreen({
   };
 
   const handleCancel = () => {
-    setEditedName(template.name);
-    setEditedExercises([...template.exerciseNames]);
+    if (template) {
+      setEditedName(template.name || '');
+      setEditedExercises([...(template.exerciseNames || [])]);
+    }
     setIsEditMode(false);
   };
 
@@ -121,6 +169,71 @@ export function ViewTemplateScreen({
     setDraggedIndex(null);
   };
 
+  // Touch/pointer handlers for mobile drag (only used in edit mode)
+  const handleHandleTouchStart = (e: React.TouchEvent, index: number) => {
+    if (!isEditMode) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const touch = e.touches[0];
+    setTouchStartY(touch.clientY);
+    setTouchStartIndex(index);
+    setDraggedIndex(index);
+    setIsDraggingFromHandle(true);
+  };
+
+  const handleHandlePointerDown = (e: React.PointerEvent, index: number) => {
+    if (!isEditMode) return;
+    // Prevent text selection on mobile
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+      setTouchStartY(e.clientY);
+      setTouchStartIndex(index);
+      setDraggedIndex(index);
+      setIsDraggingFromHandle(true);
+    }
+  };
+
+  const handleRowTouchMove = (e: React.TouchEvent, index: number) => {
+    if (!isEditMode || !isDraggingFromHandle || touchStartY === null || touchStartIndex === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const touch = e.touches[0];
+    const currentY = touch.clientY;
+    const deltaY = currentY - touchStartY;
+
+    // Only reorder if moved significantly (more than 20px)
+    if (Math.abs(deltaY) > 20) {
+      const newExercises = [...editedExercises];
+      const draggedItem = newExercises[touchStartIndex];
+      
+      // Calculate target index based on movement
+      const rowHeight = 60; // Approximate row height
+      const targetOffset = Math.round(deltaY / rowHeight);
+      let targetIndex = touchStartIndex + targetOffset;
+      targetIndex = Math.max(0, Math.min(targetIndex, newExercises.length - 1));
+
+      if (targetIndex !== touchStartIndex) {
+        newExercises.splice(touchStartIndex, 1);
+        newExercises.splice(targetIndex, 0, draggedItem);
+        setEditedExercises(newExercises);
+        setTouchStartIndex(targetIndex);
+        setDraggedIndex(targetIndex);
+      }
+    }
+  };
+
+  const handleRowTouchEnd = (e: React.TouchEvent) => {
+    if (!isEditMode || !isDraggingFromHandle) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setTouchStartY(null);
+    setTouchStartIndex(null);
+    setDraggedIndex(null);
+    setIsDraggingFromHandle(false);
+  };
+
   const handleStart = () => {
     // Always use editedExercises (which may have been modified in edit mode)
     // If never edited, editedExercises equals template.exerciseNames
@@ -177,12 +290,18 @@ export function ViewTemplateScreen({
           {/* Exercise list */}
           <div className="space-y-2">
             <p className="text-xs uppercase tracking-wide text-text-muted px-1">
-              Exercises ({isEditMode ? editedExercises.length : template.exerciseNames.length})
+              Exercises ({isEditMode ? editedExercises.length : (template.exerciseNames?.length || 0)})
             </p>
-            {(isEditMode ? editedExercises : template.exerciseNames).map((exercise, index) => {
-              const lastSession = lastSessionData.get(exercise);
+            {(isEditMode ? editedExercises : (template.exerciseNames || [])).map((exercise, index) => {
+              if (!exercise) {
+                if (import.meta.env.DEV) {
+                  console.warn('[ViewTemplateScreen] Empty exercise at index:', index);
+                }
+                return null;
+              }
+              const lastSession = lastSessionData?.get(exercise);
               return (
-                <Card 
+                <Card
                   key={`${exercise}-${index}`} 
                   gradient
                   className={isEditMode ? 'cursor-pointer' : ''}
@@ -196,7 +315,15 @@ export function ViewTemplateScreen({
                           onDragStart={() => handleDragStart(index)}
                           onDragOver={(e) => handleDragOver(e, index)}
                           onDragEnd={handleDragEnd}
-                          className="cursor-grab active:cursor-grabbing touch-none"
+                          onTouchStart={(e) => handleHandleTouchStart(e, index)}
+                          onPointerDown={(e) => handleHandlePointerDown(e, index)}
+                          className="cursor-grab active:cursor-grabbing drag-handle"
+                          style={{
+                            WebkitTouchCallout: 'none',
+                            WebkitUserSelect: 'none',
+                            userSelect: 'none',
+                            touchAction: 'none',
+                          }}
                           onClick={(e) => e.stopPropagation()}
                         >
                           <GripVertical className="w-5 h-5 text-text-muted" />

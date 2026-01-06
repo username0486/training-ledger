@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { Plus, Trash2, GripVertical, Dumbbell, Search } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Card } from '../components/Card';
@@ -25,6 +25,9 @@ export function CreateWorkoutScreen({
   const [exercises, setExercises] = useState<string[]>(initialExercises);
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [touchStartY, setTouchStartY] = useState<number | null>(null);
+  const [touchStartIndex, setTouchStartIndex] = useState<number | null>(null);
+  const [isDraggingFromHandle, setIsDraggingFromHandle] = useState(false);
 
   const handleAddExercise = (name: string) => {
     if (name.trim() && !exercises.includes(name.trim())) {
@@ -75,6 +78,69 @@ export function CreateWorkoutScreen({
 
   const handleDragEnd = () => {
     setDraggedIndex(null);
+  };
+
+  // Touch/pointer handlers for mobile
+  const handleHandleTouchStart = (e: React.TouchEvent, index: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const touch = e.touches[0];
+    setTouchStartY(touch.clientY);
+    setTouchStartIndex(index);
+    setDraggedIndex(index);
+    setIsDraggingFromHandle(true);
+  };
+
+  const handleHandlePointerDown = (e: React.PointerEvent, index: number) => {
+    // Prevent text selection on mobile
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+      setTouchStartY(e.clientY);
+      setTouchStartIndex(index);
+      setDraggedIndex(index);
+      setIsDraggingFromHandle(true);
+    }
+  };
+
+  const handleRowTouchMove = (e: React.TouchEvent, index: number) => {
+    if (!isDraggingFromHandle || touchStartY === null || touchStartIndex === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const touch = e.touches[0];
+    const currentY = touch.clientY;
+    const deltaY = currentY - touchStartY;
+
+    // Only reorder if moved significantly (more than 20px)
+    if (Math.abs(deltaY) > 20) {
+      const newExercises = [...exercises];
+      const draggedItem = newExercises[touchStartIndex];
+      
+      // Calculate target index based on movement
+      const rowHeight = 60; // Approximate row height
+      const targetOffset = Math.round(deltaY / rowHeight);
+      let targetIndex = touchStartIndex + targetOffset;
+      targetIndex = Math.max(0, Math.min(targetIndex, newExercises.length - 1));
+
+      if (targetIndex !== touchStartIndex) {
+        newExercises.splice(touchStartIndex, 1);
+        newExercises.splice(targetIndex, 0, draggedItem);
+        setExercises(newExercises);
+        setTouchStartIndex(targetIndex);
+        setDraggedIndex(targetIndex);
+      }
+    }
+  };
+
+  const handleRowTouchEnd = (e: React.TouchEvent) => {
+    if (!isDraggingFromHandle) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setTouchStartY(null);
+    setTouchStartIndex(null);
+    setDraggedIndex(null);
+    setIsDraggingFromHandle(false);
   };
 
   const handleSave = () => {
@@ -134,11 +200,25 @@ export function CreateWorkoutScreen({
                   onDragStart={() => handleDragStart(index)}
                   onDragOver={(e) => handleDragOver(e, index)}
                   onDragEnd={handleDragEnd}
+                  onTouchMove={(e) => handleRowTouchMove(e, index)}
+                  onTouchEnd={handleRowTouchEnd}
                   className={`flex items-center gap-3 p-4 bg-surface rounded-xl border border-border transition-all cursor-grab active:cursor-grabbing ${
                     draggedIndex === index ? 'opacity-50' : ''
                   }`}
                 >
-                  <GripVertical className="w-5 h-5 text-text-muted flex-shrink-0" />
+                  <div
+                    onTouchStart={(e) => handleHandleTouchStart(e, index)}
+                    onPointerDown={(e) => handleHandlePointerDown(e, index)}
+                    className="flex-shrink-0 drag-handle"
+                    style={{
+                      WebkitTouchCallout: 'none',
+                      WebkitUserSelect: 'none',
+                      userSelect: 'none',
+                      touchAction: 'none',
+                    }}
+                  >
+                    <GripVertical className="w-5 h-5 text-text-muted" />
+                  </div>
                   <span className="flex-1">{exercise}</span>
                   <button
                     onClick={() => handleRemoveExercise(index)}

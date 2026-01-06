@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Check, ChevronRight, GripVertical, Plus, SkipForward, Clock, Edit2, MoreVertical, X, ArrowRightLeft, ListEnd } from 'lucide-react';
+import { Check, ChevronRight, GripVertical, Plus, SkipForward, Clock, Edit2, MoreHorizontal, X, ArrowRightLeft, ListEnd } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -58,6 +58,9 @@ export function WorkoutSessionScreen({
   const [showHistory, setShowHistory] = useState(false);
   const [showSwapExercise, setShowSwapExercise] = useState(false);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [touchStartY, setTouchStartY] = useState<number | null>(null);
+  const [touchStartIndex, setTouchStartIndex] = useState<number | null>(null);
+  const [isDraggingFromHandle, setIsDraggingFromHandle] = useState(false);
   const [restTimerStart, setRestTimerStart] = useState<number | null>(null);
   const [restTimerElapsed, setRestTimerElapsed] = useState(0);
   const [exerciseListTab, setExerciseListTab] = useState<'upcoming' | 'completed'>('upcoming');
@@ -75,15 +78,35 @@ export function WorkoutSessionScreen({
   });
 
   // Update focus when exercises change (e.g., when starting a workout)
+  // This is critical: when a new workout is loaded, ensure we find the first incomplete exercise
   useEffect(() => {
-    if (!progressionExerciseId && exercises.length > 0) {
+    if (exercises.length > 0) {
       const firstIncomplete = exercises.find(ex => !ex.isComplete);
       if (firstIncomplete) {
-        setProgressionExerciseId(firstIncomplete.id);
-        setInteractionFocusExerciseId(firstIncomplete.id);
+        // Always set focus to first incomplete exercise when exercises change
+        // This ensures new workouts don't show "all complete" screen
+        if (!progressionExerciseId || progressionExerciseId !== firstIncomplete.id) {
+          setProgressionExerciseId(firstIncomplete.id);
+        }
+        if (!interactionFocusExerciseId || interactionFocusExerciseId !== firstIncomplete.id) {
+          setInteractionFocusExerciseId(firstIncomplete.id);
+        }
+      } else {
+        // All exercises are complete - this is expected only when user actually completes them
+        // For new workouts, this should never happen, so log a warning
+        if (import.meta.env.DEV) {
+          console.warn('[WorkoutSessionScreen] All exercises are complete on load:', {
+            exerciseCount: exercises.length,
+            exercises: exercises.map(ex => ({ name: ex.name, isComplete: ex.isComplete, sets: ex.sets.length }))
+          });
+        }
       }
+    } else if (progressionExerciseId || interactionFocusExerciseId) {
+      // Clear focus if exercises array becomes empty
+      setProgressionExerciseId(null);
+      setInteractionFocusExerciseId(null);
     }
-  }, [exercises, progressionExerciseId]);
+  }, [exercises]);
 
 
   // Find progression exercise and interaction focus exercise
@@ -195,14 +218,27 @@ export function WorkoutSessionScreen({
   };
 
   const handleDeferExercise = (exerciseId: string) => {
-    onDeferExercise(exerciseId);
     const exercise = exercises.find(ex => ex.id === exerciseId);
-    if (exercise) {
-      const currentIndex = exercises.indexOf(exercise);
-      const nextIncomplete = exercises.slice(currentIndex + 1).find(ex => !ex.isComplete);
-      if (nextIncomplete) {
-        setProgressionExerciseId(nextIncomplete.id);
-        setInteractionFocusExerciseId(nextIncomplete.id);
+    if (!exercise) return;
+    
+    // Find the next incomplete exercise BEFORE deferring (so we have the correct list)
+    const currentIndex = exercises.indexOf(exercise);
+    const nextIncomplete = exercises.slice(currentIndex + 1).find(ex => !ex.isComplete);
+    
+    // Defer the exercise (moves it to end)
+    onDeferExercise(exerciseId);
+    
+    // Move to next incomplete exercise if one exists
+    if (nextIncomplete) {
+      setProgressionExerciseId(nextIncomplete.id);
+      setInteractionFocusExerciseId(nextIncomplete.id);
+    } else {
+      // If no next incomplete, check if there are any incomplete exercises left
+      // (the deferred one is now at the end, so we might need to find the first incomplete)
+      const firstIncomplete = exercises.find(ex => !ex.isComplete && ex.id !== exerciseId);
+      if (firstIncomplete) {
+        setProgressionExerciseId(firstIncomplete.id);
+        setInteractionFocusExerciseId(firstIncomplete.id);
       }
     }
   };
@@ -290,6 +326,77 @@ export function WorkoutSessionScreen({
     setDraggedIndex(null);
   };
 
+  // Touch/pointer handlers for mobile
+  const handleHandleTouchStart = (e: React.TouchEvent, index: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const touch = e.touches[0];
+    setTouchStartY(touch.clientY);
+    setTouchStartIndex(index);
+    setDraggedIndex(index);
+    setIsDraggingFromHandle(true);
+  };
+
+  const handleHandlePointerDown = (e: React.PointerEvent, index: number) => {
+    // Prevent text selection on mobile
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+      setTouchStartY(e.clientY);
+      setTouchStartIndex(index);
+      setDraggedIndex(index);
+      setIsDraggingFromHandle(true);
+    }
+  };
+
+  const handleRowTouchMove = (e: React.TouchEvent, index: number) => {
+    if (!isDraggingFromHandle || touchStartY === null || touchStartIndex === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const touch = e.touches[0];
+    const currentY = touch.clientY;
+    const deltaY = currentY - touchStartY;
+
+    // Only reorder if moved significantly (more than 20px)
+    if (Math.abs(deltaY) > 20) {
+      const reorderedUpcoming = [...upcomingExercises];
+      const draggedItem = reorderedUpcoming[touchStartIndex];
+      
+      // Calculate target index based on movement
+      const rowHeight = 60; // Approximate row height
+      const targetOffset = Math.round(deltaY / rowHeight);
+      let targetIndex = touchStartIndex + targetOffset;
+      targetIndex = Math.max(0, Math.min(targetIndex, reorderedUpcoming.length - 1));
+
+      if (targetIndex !== touchStartIndex) {
+        reorderedUpcoming.splice(touchStartIndex, 1);
+        reorderedUpcoming.splice(targetIndex, 0, draggedItem);
+        
+        // Reconstruct full exercise list
+        const newExercises = [
+          ...completedExercises,
+          ...(progressionExercise ? [progressionExercise] : []),
+          ...reorderedUpcoming,
+        ];
+        
+        onReorderExercises(newExercises);
+        setTouchStartIndex(targetIndex);
+        setDraggedIndex(targetIndex);
+      }
+    }
+  };
+
+  const handleRowTouchEnd = (e: React.TouchEvent) => {
+    if (!isDraggingFromHandle) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setTouchStartY(null);
+    setTouchStartIndex(null);
+    setDraggedIndex(null);
+    setIsDraggingFromHandle(false);
+  };
+
   if (!focusExercise) {
     return (
       <div className="h-screen flex flex-col">
@@ -357,7 +464,7 @@ export function WorkoutSessionScreen({
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button className="p-1.5 text-text-muted hover:text-text-primary transition-colors rounded-lg hover:bg-surface/50">
-                        <MoreVertical className="w-5 h-5" />
+                        <MoreHorizontal className="w-5 h-5" />
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-48">
@@ -479,7 +586,7 @@ export function WorkoutSessionScreen({
                     disabled={focusExercise.sets.length === 0}
                   >
                     <Check className="w-4 h-4 mr-2 inline" />
-                    Complete
+                    Done
                   </Button>
                 )}
               </div>
@@ -557,14 +664,15 @@ export function WorkoutSessionScreen({
                           </p>
                         )}
                       </div>
-                      <button
+                      <Button
+                        variant="primary"
                         onClick={() => setShowAddExercise(true)}
-                        className="flex items-center gap-2 px-3 py-2 text-text-muted hover:text-text-primary transition-colors rounded-lg hover:bg-surface/50"
+                        className="flex items-center gap-2"
                         title="Add exercise"
                       >
                         <Plus className="w-5 h-5" />
                         <span className="text-sm">Add exercise</span>
-                      </button>
+                      </Button>
                     </div>
                   )}
 
@@ -580,11 +688,25 @@ export function WorkoutSessionScreen({
                             onDragStart={() => handleDragStart(index)}
                             onDragOver={(e) => handleDragOver(e, index)}
                             onDragEnd={handleDragEnd}
+                            onTouchMove={(e) => handleRowTouchMove(e, index)}
+                            onTouchEnd={handleRowTouchEnd}
                             className={`flex items-center gap-3 px-4 py-4 bg-surface/30 rounded-lg border border-border-subtle hover:bg-surface/50 transition-all cursor-grab active:cursor-grabbing ${
                               draggedIndex === index ? 'opacity-50' : ''
                             }`}
                           >
-                            <GripVertical className="w-5 h-5 text-text-muted flex-shrink-0" />
+                            <div
+                              onTouchStart={(e) => handleHandleTouchStart(e, index)}
+                              onPointerDown={(e) => handleHandlePointerDown(e, index)}
+                              className="flex-shrink-0 drag-handle"
+                              style={{
+                                WebkitTouchCallout: 'none',
+                                WebkitUserSelect: 'none',
+                                userSelect: 'none',
+                                touchAction: 'none',
+                              }}
+                            >
+                              <GripVertical className="w-5 h-5 text-text-muted" />
+                            </div>
                             <div className="flex-1 min-w-0">
                               <p className="truncate text-base">{exercise.name}</p>
                               {lastData && (

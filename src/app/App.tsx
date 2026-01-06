@@ -204,15 +204,12 @@ export default function App() {
   };
 
   /**
-   * Handle "Start New" when a session is already in progress.
-   * 
-   * Behavior:
-   * - If meaningful work exists (sets or completed exercises): Save to history
-   * - If session is empty (0 sets AND 0 completed exercises): Discard
-   * - Show appropriate banner message based on session type and action
-   * - Then execute pending action to start new session
+   * Finalize in-progress session (DATA ONLY - no navigation side-effects)
+   * Returns banner message if session was finalized, null if no session existed
    */
-  const handleSaveAndContinueConflictSession = () => {
+  const finalizeInProgressSession = (): { message: string; variant: 'info' } | null => {
+    let bannerMessage: { message: string; variant: 'info' } | null = null;
+    
     // Handle single exercise session
     if (incompleteExerciseSession) {
       const hasSets = incompleteExerciseSession.sets.length > 0;
@@ -233,15 +230,17 @@ export default function App() {
           isComplete: true,
         };
         setWorkouts([...workouts, workout]);
-        setBanner({ message: 'Previous exercise saved', variant: 'info' });
+        bannerMessage = { message: 'Previous exercise saved', variant: 'info' };
       } else {
         // Discard: empty session (0 sets)
-        setBanner({ message: 'Previous exercise discarded (0 sets)', variant: 'info' });
+        bannerMessage = { message: 'Previous exercise discarded (0 sets)', variant: 'info' };
       }
       
       // Clear incomplete session state
       setIncompleteExerciseSession(null);
       setExerciseSessionSets([]);
+      // Note: We do NOT navigate here - navigation is handled by the caller
+      // This ensures we don't accidentally navigate to completion screen
     }
     
     // Handle workout session
@@ -271,23 +270,65 @@ export default function App() {
             return w;
           }));
           saveIncompleteWorkoutId(null);
-          setBanner({ message: 'Previous workout saved', variant: 'info' });
+          bannerMessage = { message: 'Previous workout saved', variant: 'info' };
         } else {
           // Discard: empty session (0 sets AND 0 completed exercises)
           setWorkouts(workouts.filter(w => w.id !== workout.id));
           saveIncompleteWorkoutId(null);
-          setBanner({ message: 'Previous workout discarded (0 sets)', variant: 'info' });
+          bannerMessage = { message: 'Previous workout discarded (0 sets)', variant: 'info' };
         }
       }
     }
     
-    // Execute pending action (start new workout/exercise)
-    if (pendingAction) {
-      executePendingAction();
+    return bannerMessage;
+  };
+
+  /**
+   * Handle "Start New" when a session is already in progress.
+   * 
+   * Behavior:
+   * - Finalize in-progress session (save or discard)
+   * - Show appropriate banner message
+   * - Create and navigate to new session
+   */
+  const handleSaveAndContinueConflictSession = () => {
+    // Finalize in-progress session (data only, no navigation)
+    const banner = finalizeInProgressSession();
+    if (banner) {
+      setBanner(banner);
     }
     
+    // Clear the conflict modal state first
     setShowSessionConflict(false);
+    const actionToExecute = pendingAction;
     setPendingAction(null);
+    
+    // Execute pending action (start new workout/exercise)
+    // Use setTimeout to ensure state updates from finalizeInProgressSession have been applied
+    // This prevents race conditions where the new workout might not be found
+    if (actionToExecute) {
+      setTimeout(() => {
+        executePendingActionWithContext(actionToExecute);
+      }, 0);
+    }
+  };
+
+  const executePendingActionWithContext = (action: typeof pendingAction) => {
+    if (!action) return;
+    
+    if (action.type === 'workout') {
+      if (action.data.type === 'template') {
+        handleStartTemplateInternal(action.data.templateId);
+      } else if (action.data.type === 'quick') {
+        handleQuickStartInternal();
+      } else if (action.data.type === 'named') {
+        createWorkoutInternal(action.data.name);
+      } else if (action.data.type === 'history') {
+        startWorkoutFromHistoryInternal(action.data.workoutId);
+      }
+    } else if (action.type === 'exercise') {
+      startExerciseSessionInternal(action.data.exerciseName);
+    }
   };
 
   const executePendingAction = () => {
@@ -311,25 +352,42 @@ export default function App() {
   // Internal versions that don't check conflicts
   const handleStartTemplateInternal = (templateId: string) => {
     const template = templates.find(t => t.id === templateId);
-    if (!template) return;
+    if (!template) {
+      if (import.meta.env.DEV) {
+        console.error('[App] Template not found for templateId:', templateId);
+      }
+      return;
+    }
 
+    // Use a more unique ID to avoid conflicts with workouts created by finalizeInProgressSession
+    const workoutId = `${Date.now()}-${Math.random()}`;
     const newWorkout: Workout = {
-      id: Date.now().toString(),
+      id: workoutId,
       name: template.name,
-      exercises: template.exerciseNames.map(name => ({
-        id: Date.now().toString() + Math.random(),
+      exercises: template.exerciseNames.map((name, idx) => ({
+        id: `${workoutId}-ex-${idx}-${Math.random()}`,
         name,
         sets: [],
+        isComplete: false,
       })),
       startTime: Date.now(),
       isComplete: false,
     };
+    
+    if (import.meta.env.DEV) {
+      console.log('[App] Creating new workout:', {
+        id: newWorkout.id,
+        name: newWorkout.name,
+        exerciseCount: newWorkout.exercises.length,
+        exercises: newWorkout.exercises.map(ex => ({ name: ex.name, isComplete: ex.isComplete, sets: ex.sets.length }))
+      });
+    }
+    
     setWorkouts(prev => [...prev, newWorkout]);
     saveIncompleteWorkoutId(newWorkout.id);
-    // Use setTimeout to ensure state update completes before navigation
-    setTimeout(() => {
-      setScreen({ type: 'workout-session', workoutId: newWorkout.id });
-    }, 0);
+    // Navigate directly to active workout session (not completion screen)
+    // Clear any exercise-session screen state first to prevent navigation to completion screen
+    setScreen({ type: 'workout-session', workoutId: newWorkout.id });
   };
 
   const handleQuickStartInternal = () => {
@@ -342,10 +400,9 @@ export default function App() {
     };
     setWorkouts(prev => [...prev, newWorkout]);
     saveIncompleteWorkoutId(newWorkout.id);
-    // Use setTimeout to ensure state update completes before navigation
-    setTimeout(() => {
-      setScreen({ type: 'workout-session', workoutId: newWorkout.id });
-    }, 0);
+    // Navigate directly to active workout session (not completion screen)
+    // Clear any exercise-session screen state first to prevent navigation to completion screen
+    setScreen({ type: 'workout-session', workoutId: newWorkout.id });
   };
 
   const createWorkoutInternal = (name: string) => {
@@ -358,10 +415,9 @@ export default function App() {
     };
     setWorkouts(prev => [...prev, newWorkout]);
     saveIncompleteWorkoutId(newWorkout.id);
-    // Use setTimeout to ensure state update completes before navigation
-    setTimeout(() => {
-      setScreen({ type: 'workout-session', workoutId: newWorkout.id });
-    }, 0);
+    // Navigate directly to active workout session (not completion screen)
+    // Clear any exercise-session screen state first to prevent navigation to completion screen
+    setScreen({ type: 'workout-session', workoutId: newWorkout.id });
   };
 
   const startExerciseSessionInternal = (name: string) => {
@@ -414,12 +470,9 @@ export default function App() {
 
     setWorkouts(prev => [...prev, newWorkout]);
     saveIncompleteWorkoutId(newWorkout.id);
-    
-    // Navigate directly to active session (not summary/completed screen)
-    // User should land ready to log, not on "all exercises complete" screen
-    setTimeout(() => {
-      setScreen({ type: 'workout-session', workoutId: newWorkout.id });
-    }, 0);
+    // Navigate directly to active workout session (not completion screen)
+    // Clear any exercise-session screen state first to prevent navigation to completion screen
+    setScreen({ type: 'workout-session', workoutId: newWorkout.id });
   };
 
   // Wrapped versions that check for conflicts
@@ -928,8 +981,68 @@ export default function App() {
         )}
 
         {screen.type === 'view-template' && (() => {
+          // Defensive: Ensure templateId exists
+          if (!screen.templateId) {
+            if (import.meta.env.DEV) {
+              console.error('[App] view-template screen missing templateId');
+            }
+            return (
+              <div className="flex flex-col h-full items-center justify-center p-5">
+                <div className="text-center space-y-4 max-w-md">
+                  <h2 className="text-xl font-semibold">Workout not found</h2>
+                  <p className="text-text-muted">
+                    The workout you're looking for could not be found. It may have been deleted.
+                  </p>
+                  <Button variant="primary" onClick={() => setScreen({ type: 'home' })}>
+                    Back to Home
+                  </Button>
+                </div>
+              </div>
+            );
+          }
+
+          // Find template by ID - this is the explicit data source (not from active session state)
           const template = templates.find(t => t.id === screen.templateId);
-          if (!template) return null;
+          
+          // Defensive: Handle missing template with error state
+          if (!template) {
+            if (import.meta.env.DEV) {
+              console.error('[App] Template not found for templateId:', screen.templateId, 'Available templates:', templates.map(t => t.id));
+            }
+            return (
+              <div className="flex flex-col h-full items-center justify-center p-5">
+                <div className="text-center space-y-4 max-w-md">
+                  <h2 className="text-xl font-semibold">Workout not found</h2>
+                  <p className="text-text-muted">
+                    The workout template could not be found. It may have been deleted or the ID is invalid.
+                  </p>
+                  <Button variant="primary" onClick={() => setScreen({ type: 'home' })}>
+                    Back to Home
+                  </Button>
+                </div>
+              </div>
+            );
+          }
+
+          // Defensive: Ensure template has required properties
+          if (!template.exerciseNames || !Array.isArray(template.exerciseNames)) {
+            if (import.meta.env.DEV) {
+              console.error('[App] Template has invalid exerciseNames:', template);
+            }
+            return (
+              <div className="flex flex-col h-full items-center justify-center p-5">
+                <div className="text-center space-y-4 max-w-md">
+                  <h2 className="text-xl font-semibold">Invalid workout data</h2>
+                  <p className="text-text-muted">
+                    The workout data is invalid or corrupted.
+                  </p>
+                  <Button variant="primary" onClick={() => setScreen({ type: 'home' })}>
+                    Back to Home
+                  </Button>
+                </div>
+              </div>
+            );
+          }
           
           // Build last session data map for template exercises
           const lastSessionData = new Map<string, { sets: Array<{ weight: number; reps: number }>; date: number }>();
@@ -949,22 +1062,24 @@ export default function App() {
                 // Create workout with edited exercises (editedExerciseNames is always provided)
                 checkSessionConflict(
                   () => {
+                    const workoutId = `${Date.now()}-${Math.random()}`;
                     const newWorkout: Workout = {
-                      id: Date.now().toString(),
+                      id: workoutId,
                       name: template.name,
-                      exercises: editedExerciseNames.map(name => ({
-                        id: Date.now().toString() + Math.random(),
+                      exercises: editedExerciseNames.map((name, idx) => ({
+                        id: `${workoutId}-ex-${idx}-${Math.random()}`,
                         name,
                         sets: [],
+                        isComplete: false,
                       })),
                       startTime: Date.now(),
                       isComplete: false,
                     };
                     setWorkouts(prev => [...prev, newWorkout]);
                     saveIncompleteWorkoutId(newWorkout.id);
-                    setTimeout(() => {
-                      setScreen({ type: 'workout-session', workoutId: newWorkout.id });
-                    }, 0);
+                    // Navigate directly to active workout session (not completion screen)
+                    // Clear any exercise-session screen state first to prevent navigation to completion screen
+                    setScreen({ type: 'workout-session', workoutId: newWorkout.id });
                   },
                   'workout',
                   { type: 'template', templateId: template.id }
@@ -998,11 +1113,13 @@ export default function App() {
         {screen.type === 'workout-session' && (() => {
           const workout = workouts.find(w => w.id === screen.workoutId);
           if (!workout) {
-            console.error('Workout not found:', {
-              lookingFor: screen.workoutId,
-              availableWorkouts: workouts.map(w => ({ id: w.id, name: w.name, isComplete: w.isComplete })),
-              workoutsLength: workouts.length
-            });
+            if (import.meta.env.DEV) {
+              console.error('[App] Workout not found:', {
+                lookingFor: screen.workoutId,
+                availableWorkouts: workouts.map(w => ({ id: w.id, name: w.name, isComplete: w.isComplete })),
+                workoutsLength: workouts.length
+              });
+            }
             // If workout not found, show error and provide way to go back
             return (
               <div className="flex items-center justify-center h-full p-5">
@@ -1018,6 +1135,39 @@ export default function App() {
                 </div>
               </div>
             );
+          }
+
+          // Defensive: Ensure workout has exercises and they're not all complete
+          if (!workout.exercises || workout.exercises.length === 0) {
+            if (import.meta.env.DEV) {
+              console.error('[App] Workout has no exercises:', workout);
+            }
+            return (
+              <div className="flex items-center justify-center h-full p-5">
+                <div className="text-center max-w-md">
+                  <p className="text-text-primary text-lg mb-2">Invalid workout</p>
+                  <p className="text-text-muted mb-6">This workout has no exercises.</p>
+                  <Button variant="primary" onClick={() => {
+                    setScreen({ type: 'home' });
+                    setBanner({ message: 'Returned to home', variant: 'info' });
+                  }}>
+                    Go Home
+                  </Button>
+                </div>
+              </div>
+            );
+          }
+
+          // Defensive: Log if all exercises are complete (shouldn't happen for new workouts)
+          const allComplete = workout.exercises.every(ex => ex.isComplete);
+          if (allComplete && !workout.isComplete) {
+            if (import.meta.env.DEV) {
+              console.warn('[App] New workout has all exercises marked complete:', {
+                workoutId: workout.id,
+                workoutName: workout.name,
+                exercises: workout.exercises.map(ex => ({ name: ex.name, isComplete: ex.isComplete, sets: ex.sets.length }))
+              });
+            }
           }
           
           // Build last session data map

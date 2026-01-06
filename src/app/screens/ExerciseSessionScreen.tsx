@@ -177,7 +177,7 @@ export function ExerciseSessionScreen({
                     disabled={sets.length === 0}
                   >
                     <Check className="w-4 h-4 mr-2 inline" />
-                    End Exercise
+                    Done
                   </Button>
                 )}
               </div>

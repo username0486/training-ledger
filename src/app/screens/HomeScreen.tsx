@@ -129,10 +129,14 @@ export function HomeScreen({
                 <div className="flex items-center justify-between">
                   <div className="flex-1 min-w-0">
                     <h3 className="mb-1 truncate">{unfinishedWorkout.name}</h3>
-                    <p className="text-text-muted">
-                      {unfinishedWorkout.exercises.length} {unfinishedWorkout.exercises.length === 1 ? 'exercise' : 'exercises'} · 
-                      Started {formatTimeAgo(unfinishedWorkout.startTime)}
-                    </p>
+                    <div className="flex flex-col gap-1">
+                      <p className="text-text-muted">
+                        {unfinishedWorkout.exercises.length} {unfinishedWorkout.exercises.length === 1 ? 'exercise' : 'exercises'}
+                      </p>
+                      <p className="text-text-muted">
+                        Started {formatTimeAgo(unfinishedWorkout.startTime)}
+                      </p>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <button
@@ -168,17 +172,14 @@ export function HomeScreen({
                 <div className="flex items-center justify-between">
                   <div className="flex-1 min-w-0">
                     <h3 className="mb-1 truncate">{incompleteExerciseSession.exerciseName}</h3>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-col gap-1">
                       <p className="text-text-muted">
                         {incompleteExerciseSession.sets.length} {incompleteExerciseSession.sets.length === 1 ? 'set' : 'sets'} logged
                       </p>
                       {restTimerElapsed > 0 && (
-                        <>
-                          <span className="text-text-muted/40">·</span>
-                          <p className="text-text-muted/60 tabular-nums text-sm">
-                            {Math.floor(restTimerElapsed / 60)}:{(restTimerElapsed % 60).toString().padStart(2, '0')} since last set
-                          </p>
-                        </>
+                        <p className="text-text-muted/60 tabular-nums text-sm">
+                          {Math.floor(restTimerElapsed / 60)}:{(restTimerElapsed % 60).toString().padStart(2, '0')} since last set
+                        </p>
                       )}
                     </div>
                   </div>
