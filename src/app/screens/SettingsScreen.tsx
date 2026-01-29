@@ -1,14 +1,18 @@
 import { useState, useEffect } from 'react';
-import { Sun, Moon, Scale, Weight as WeightIcon } from 'lucide-react';
+import { Sun, Moon, Scale, Weight as WeightIcon, Download, Upload } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { SegmentedToggle } from '../components/SegmentedToggle';
+import { Button } from '../components/Button';
+import { Card } from '../components/Card';
 import { getAppearance, getUnitSystem, setAppearance, setUnitSystem, Appearance, UnitSystem } from '../../utils/preferences';
+import { exportData, importData } from '../storage/storageGateway';
 
 interface SettingsScreenProps {
   theme: 'light' | 'dark';
   onThemeChange: (theme: 'light' | 'dark') => void;
   onUnitChange?: () => void;
   onBack: () => void;
+  onDataImported?: () => void;
 }
 
 export function SettingsScreen({ theme, onThemeChange, onUnitChange, onBack, onDataImported }: SettingsScreenProps) {
