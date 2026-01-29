@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Check, ChevronRight, GripVertical, Plus, SkipForward, Clock, Edit2, MoreHorizontal, X, ArrowRightLeft, ListEnd } from 'lucide-react';
+import { Check, ChevronRight, GripVertical, Plus, SkipForward, Clock, MoreHorizontal, X, ArrowRightLeft, ListEnd, Link2 } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -7,17 +7,30 @@ import { Modal } from '../components/Modal';
 import { ExerciseSearchBottomSheet } from '../components/ExerciseSearchBottomSheet';
 import { Pill } from '../components/Pill';
 import { PersistentBottomSheet } from '../components/PersistentBottomSheet';
+import { PairWithSheet } from '../components/PairWithSheet';
+import { SupersetBlock } from '../components/SupersetBlock';
+import { SwapExerciseSheet } from '../components/SwapExerciseSheet';
+import { RemoveExerciseSheet } from '../components/RemoveExerciseSheet';
 import { Exercise, Set, Workout } from '../types';
 import { formatRelativeTime, getRecentSessionsForExercise } from '../utils/storage';
-import { ExerciseSearch, ExerciseSearchHandle } from '../components/ExerciseSearch';
+import { ExerciseSearch } from '../components/ExerciseSearch';
 import { getAllExercisesList } from '../../utils/exerciseDb';
-import { formatWeight } from '../../utils/weightFormat';
+import { formatWeight, formatWeightForDisplay, convertKgToDisplay, convertDisplayToKg } from '../../utils/weightFormat';
+import { getGroupInfo, filterGroupedMembers, buildSessionItems, SessionItem } from '../utils/exerciseGrouping';
+import { SessionScrollLayout } from '../components/SessionScrollLayout';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../components/ui/dropdown-menu';
+import { CompactBottomSheet } from '../components/CompactBottomSheet';
+import { OverflowActionGroup } from '../components/OverflowActionGroup';
+import { CompletedSetsPanel } from '../components/CompletedSetsPanel';
+import { RepsWeightGrid } from '../components/RepsWeightGrid';
+import { ManageSetSheet } from '../components/ManageSetSheet';
+import { LastSessionStats } from '../components/LastSessionStats';
+import { formatDuration, getElapsedSec } from '../utils/duration';
 
 interface WorkoutSessionScreenProps {
   workoutName: string;
@@ -25,15 +38,27 @@ interface WorkoutSessionScreenProps {
   lastSessionData: Map<string, { sets: Array<{ weight: number; reps: number }>; date: number }>;
   allWorkouts: Workout[];
   onBack: () => void;
-  onAddExercise: (name: string) => void;
+  onAddExercise: (name: string, pairWithExerciseId?: string, swapWithExerciseId?: string, swapGroupId?: string) => void;
   onAddSet: (exerciseId: string, weight: number, reps: number, restDuration?: number) => void;
+  onAddSupersetSet?: (exercises: Array<{ exerciseId: string; weight: number; reps: number }>, supersetSetId: string) => void;
   onDeleteSet: (exerciseId: string, setId: string) => void;
+  onUpdateSet?: (exerciseId: string, setId: string, weight: number, reps: number) => void;
   onCompleteExercise: (exerciseId: string) => void;
+  onCompleteGroup?: (exerciseIds: string[]) => void;
   onSkipExercise: (exerciseId: string) => void;
   onDeferExercise: (exerciseId: string) => void;
   onSwapExercise: (exerciseId: string, newExerciseName: string) => void;
   onReorderExercises: (exercises: Exercise[]) => void;
   onFinishWorkout: () => void;
+  onEndWorkout?: () => void; // Optional: end workout early (if not provided, uses onFinishWorkout)
+  startedAt?: number;
+  endedAt?: number;
+  onEnsureStartedAt?: () => void; // ensures startedAt is set + persisted (idempotent)
+  onGroupExercises?: (instanceIds: string[]) => void;
+  onAddToGroup?: (groupId: string, instanceId: string) => void;
+  onMergeGroups?: (groupId1: string, groupId2: string) => void;
+  onUngroup?: (instanceId: string) => void;
+  onSwapGroupMember?: (groupId: string, sourceMemberInstanceId: string, replacementInstanceId: string) => void;
 }
 
 export function WorkoutSessionScreen({
@@ -44,32 +69,87 @@ export function WorkoutSessionScreen({
   onBack,
   onAddExercise,
   onAddSet,
+  onAddSupersetSet,
   onDeleteSet,
+  onUpdateSet,
   onCompleteExercise,
+  onCompleteGroup,
   onSkipExercise,
   onDeferExercise,
   onSwapExercise,
   onReorderExercises,
   onFinishWorkout,
+  onEndWorkout,
+  startedAt,
+  endedAt,
+  onEnsureStartedAt,
+  onGroupExercises,
+  onAddToGroup,
+  onMergeGroups,
+  onUngroup,
+  onSwapGroupMember,
 }: WorkoutSessionScreenProps) {
   const [weight, setWeight] = useState<string>('');
   const [reps, setReps] = useState<string>('');
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showSwapExercise, setShowSwapExercise] = useState(false);
+  const [showPairWith, setShowPairWith] = useState(false);
+  // Group management state
+  const [showPairAnother, setShowPairAnother] = useState(false);
+  const [showSwapExerciseInSuperset, setShowSwapExerciseInSuperset] = useState(false);
+  const [showRemoveExercise, setShowRemoveExercise] = useState(false);
+  // Finish workout confirmation
+  const [showFinishConfirmation, setShowFinishConfirmation] = useState(false);
+
+  // Ensure session startedAt is persisted as soon as this screen is active (idempotent)
+  useEffect(() => {
+    onEnsureStartedAt?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // LIVE header timer (timestamp-based; interval only forces re-render)
+  const [timerNow, setTimerNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!startedAt) return;
+    if (endedAt) return;
+    const id = window.setInterval(() => setTimerNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [startedAt, endedAt]);
+
+  const elapsedSec = startedAt ? getElapsedSec(startedAt, endedAt) : 0;
+  const elapsedLabel = formatDuration(elapsedSec);
+  const [activeGroupIdForManagement, setActiveGroupIdForManagement] = useState<string | null>(null);
+  const [exerciseToSwapId, setExerciseToSwapId] = useState<string | null>(null);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [combineTargetIndex, setCombineTargetIndex] = useState<number | null>(null);
+  const [isCombining, setIsCombining] = useState(false);
+  const [hoverStartTime, setHoverStartTime] = useState<number | null>(null);
+  const [isDraggingOverActive, setIsDraggingOverActive] = useState(false);
+  const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [touchStartY, setTouchStartY] = useState<number | null>(null);
   const [touchStartIndex, setTouchStartIndex] = useState<number | null>(null);
   const [isDraggingFromHandle, setIsDraggingFromHandle] = useState(false);
   const [restTimerStart, setRestTimerStart] = useState<number | null>(null);
   const [restTimerElapsed, setRestTimerElapsed] = useState(0);
+  // Bottom sheet state for standalone exercise overflow
+  const [showExerciseOverflowSheet, setShowExerciseOverflowSheet] = useState(false);
+  const [overflowExerciseId, setOverflowExerciseId] = useState<string | null>(null);
+  // Manage set sheet state
+  const [showManageSetSheet, setShowManageSetSheet] = useState(false);
+  const [selectedSetId, setSelectedSetId] = useState<string | null>(null);
+  const [selectedSetExerciseId, setSelectedSetExerciseId] = useState<string | null>(null);
   const [exerciseListTab, setExerciseListTab] = useState<'upcoming' | 'completed'>('upcoming');
   const [animateCompleted, setAnimateCompleted] = useState(false);
   const previousCompletedCountRef = useRef(0);
-  const addExerciseSearchRef = useRef<ExerciseSearchHandle>(null);
-  const swapExerciseSearchRef = useRef<ExerciseSearchHandle>(null);
 
-  // Focus State
+  // Focus State - initialize with first incomplete item
+  const getInitialActiveItemId = () => {
+    const sessionItems = buildSessionItems(exercises);
+    const firstIncompleteItem = sessionItems.find(item => !item.isComplete);
+    return firstIncompleteItem?.id || null;
+  };
+  
   const [progressionExerciseId, setProgressionExerciseId] = useState<string | null>(() => {
     const firstIncomplete = exercises.find(ex => !ex.isComplete);
     return firstIncomplete?.id || null;
@@ -78,23 +158,64 @@ export function WorkoutSessionScreen({
     const firstIncomplete = exercises.find(ex => !ex.isComplete);
     return firstIncomplete?.id || null;
   });
+  
+  // Store last focused exercise ID before all exercises become complete
+  // This allows us to restore the exact UI state when returning from "All exercises complete" screen
+  const lastFocusedExerciseIdRef = useRef<string | null>(null);
 
-  // Update focus when exercises change (e.g., when starting a workout)
-  // This is critical: when a new workout is loaded, ensure we find the first incomplete exercise
+  // Track exercise IDs and completion status separately to avoid triggering on set changes
+  const exerciseIds = exercises.map(ex => ex.id).join(',');
+  const exerciseCompletionStatus = exercises.map(ex => `${ex.id}:${ex.isComplete}`).join(',');
+  
+  // Track previous completion status to detect transitions (incomplete -> complete)
+  const previousCompletionStatusRef = useRef<string>(exerciseCompletionStatus);
+  
+  // Update focus when exercises are added/removed or completion status changes
+  // DO NOT trigger on set changes (editing/deleting sets should not change focus)
+  // DO NOT change focus if user is currently editing a set (manage set sheet is open)
   useEffect(() => {
+    // If manage set sheet is open, don't change focus (user is editing)
+    if (showManageSetSheet) {
+      return;
+    }
+    
     if (exercises.length > 0) {
       const firstIncomplete = exercises.find(ex => !ex.isComplete);
       if (firstIncomplete) {
-        // Always set focus to first incomplete exercise when exercises change
-        // This ensures new workouts don't show "all complete" screen
-        if (!progressionExerciseId || progressionExerciseId !== firstIncomplete.id) {
-          setProgressionExerciseId(firstIncomplete.id);
-        }
-        if (!interactionFocusExerciseId || interactionFocusExerciseId !== firstIncomplete.id) {
-          setInteractionFocusExerciseId(firstIncomplete.id);
+        // Only update focus if:
+        // 1. No focus is set yet, OR
+        // 2. Current focus exercise no longer exists, OR
+        // 3. Current focus exercise JUST became complete (transitioned from incomplete to complete)
+        const currentFocusExists = exercises.find(ex => ex.id === interactionFocusExerciseId);
+        const currentFocusIsComplete = currentFocusExists?.isComplete;
+        
+        // Check if the current focus exercise transitioned from incomplete to complete
+        const previousStatus = previousCompletionStatusRef.current;
+        const currentStatus = exerciseCompletionStatus;
+        const focusExerciseId = interactionFocusExerciseId;
+        const focusExerciseWasIncomplete = focusExerciseId && previousStatus.includes(`${focusExerciseId}:false`);
+        const focusExerciseNowComplete = focusExerciseId && currentStatus.includes(`${focusExerciseId}:true`);
+        const justBecameComplete = focusExerciseWasIncomplete && focusExerciseNowComplete;
+        
+        // Only reset focus if:
+        // - No focus set, OR
+        // - Focus exercise doesn't exist, OR
+        // - Focus exercise JUST became complete (user pressed Done)
+        // Do NOT reset if focus exercise was already complete (user is editing history)
+        if (!progressionExerciseId || !currentFocusExists || justBecameComplete) {
+          if (!interactionFocusExerciseId || !currentFocusExists || justBecameComplete) {
+            setProgressionExerciseId(firstIncomplete.id);
+            setInteractionFocusExerciseId(firstIncomplete.id);
+          }
         }
       } else {
-        // All exercises are complete - this is expected only when user actually completes them
+        // All exercises are complete - preserve the last focused exercise ID before clearing focus
+        // This allows us to restore the exact UI state when user returns from "All exercises complete" screen
+        if (interactionFocusExerciseId && !lastFocusedExerciseIdRef.current) {
+          // Store the last focused exercise ID before it gets cleared
+          lastFocusedExerciseIdRef.current = interactionFocusExerciseId;
+        }
+        
         // For new workouts, this should never happen, so log a warning
         if (import.meta.env.DEV) {
           console.warn('[WorkoutSessionScreen] All exercises are complete on load:', {
@@ -108,25 +229,85 @@ export function WorkoutSessionScreen({
       setProgressionExerciseId(null);
       setInteractionFocusExerciseId(null);
     }
-  }, [exercises]);
+    
+    // Update previous status for next comparison
+    previousCompletionStatusRef.current = exerciseCompletionStatus;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exerciseIds, exerciseCompletionStatus, showManageSetSheet]); // Only depend on IDs and completion status, not sets
 
 
+  // Build session items (exercises + superset groups)
+  const sessionItems = buildSessionItems(exercises);
+  
   // Find progression exercise and interaction focus exercise
   const progressionExercise = exercises.find(ex => ex.id === progressionExerciseId) || null;
   const focusExercise = exercises.find(ex => ex.id === interactionFocusExerciseId) || progressionExercise;
   
-  // Prefill inputs with last set's values ONLY after a set is added (not on initial load)
-  useEffect(() => {
-    if (focusExercise && focusExercise.sets.length > 0) {
-      const lastSet = focusExercise.sets[focusExercise.sets.length - 1];
-      setWeight(lastSet.weight.toString());
-      setReps(lastSet.reps.toString());
-    } else if (focusExercise && focusExercise.sets.length === 0) {
-      // Clear fields when moving to a new exercise (no sets yet)
-      setWeight('');
-      setReps('');
+  // Determine active item ID (groupId for supersets, exerciseId for singles)
+  // If no focus exercise but we have exercises, use the last one (all complete scenario)
+  const activeItemId = (() => {
+    if (!focusExercise) {
+      // All exercises complete - use last exercise or stored last focused
+      if (lastFocusedExerciseIdRef.current) {
+        const lastFocusedId = lastFocusedExerciseIdRef.current;
+        const lastFocusedExercise = exercises.find(ex => ex.id === lastFocusedId);
+        if (lastFocusedExercise) {
+          if (lastFocusedExercise.groupId) {
+            const groupMembers = exercises.filter(ex => ex.groupId === lastFocusedExercise.groupId);
+            return groupMembers.length >= 2 ? lastFocusedExercise.groupId : lastFocusedExercise.id;
+          }
+          return lastFocusedExercise.id;
+        }
+      }
+      // Fallback to last exercise
+      if (exercises.length > 0) {
+        const lastExercise = exercises[exercises.length - 1];
+        if (lastExercise) {
+          if (lastExercise.groupId) {
+            const groupMembers = exercises.filter(ex => ex.groupId === lastExercise.groupId);
+            return groupMembers.length >= 2 ? lastExercise.groupId : lastExercise.id;
+          }
+          return lastExercise.id;
+        }
+      }
+      return null;
     }
-  }, [focusExercise?.id, focusExercise?.sets.length]);
+    if (focusExercise.groupId) {
+      // Check if it's actually a superset (2+ members)
+      const groupMembers = exercises.filter(ex => ex.groupId === focusExercise.groupId);
+      return groupMembers.length >= 2 ? focusExercise.groupId : focusExercise.id;
+    }
+    return focusExercise.id;
+  })();
+  
+  // Check if focus exercise is part of a group
+  const activeGroupId = focusExercise?.groupId || null;
+  const activeGroupMembers = activeGroupId 
+    ? exercises.filter(ex => ex.groupId === activeGroupId).sort((a, b) => {
+        const indexA = exercises.findIndex(e => e.id === a.id);
+        const indexB = exercises.findIndex(e => e.id === b.id);
+        return indexA - indexB;
+      })
+    : [];
+  
+  // Prefill inputs with last set's values ONLY when focus exercise changes (not when sets change)
+  // This prevents clearing inputs when editing sets on completed exercises
+  // Weight is stored in kg (canonical), convert to display unit for input
+  useEffect(() => {
+    if (focusExercise) {
+      if (focusExercise.sets.length > 0) {
+        const lastSet = focusExercise.sets[focusExercise.sets.length - 1];
+        // Convert from kg (canonical) to display unit
+        const displayWeight = convertKgToDisplay(lastSet.weight);
+        setWeight(displayWeight.toString());
+        setReps(lastSet.reps.toString());
+      } else {
+        // Clear fields when moving to a new exercise (no sets yet)
+        setWeight('');
+        setReps('');
+      }
+    }
+  }, [focusExercise?.id]); // Only depend on exercise ID, not sets.length
   
   // Completed exercises
   const completedExercises = exercises.filter(ex => ex.isComplete);
@@ -147,12 +328,23 @@ export function WorkoutSessionScreen({
   }, [completedExercises.length]);
   
   // Upcoming exercises (after progression exercise, incomplete)
+  // Filter out grouped members - they appear in primary Superset container, not as separate Up Next items
   const progressionIndex = progressionExercise ? exercises.indexOf(progressionExercise) : -1;
-  const upcomingExercises = progressionExercise && progressionIndex >= 0
+  const allUpcoming = progressionExercise && progressionIndex >= 0
     ? exercises.slice(progressionIndex + 1).filter(ex => !ex.isComplete)
     : exercises.filter(ex => !ex.isComplete);
+  const upcomingExercises = filterGroupedMembers(allUpcoming);
 
-  // Rest timer logic
+  // Rest timer logic - keyed to activeItemId, not groupId
+  // Timer ownership belongs ONLY to the currently active item
+  // Clear timer immediately when activeItemId changes
+  useEffect(() => {
+    // Clear timer when active item changes
+    setRestTimerStart(null);
+    setRestTimerElapsed(0);
+  }, [activeItemId]);
+
+  // Update timer display only (no navigation/focus changes)
   useEffect(() => {
     if (restTimerStart === null) {
       setRestTimerElapsed(0);
@@ -162,6 +354,7 @@ export function WorkoutSessionScreen({
     const interval = setInterval(() => {
       const elapsed = Math.floor((Date.now() - restTimerStart) / 1000);
       setRestTimerElapsed(elapsed);
+      // Timer only updates display - no navigation or focus changes
     }, 1000);
 
     return () => clearInterval(interval);
@@ -169,14 +362,18 @@ export function WorkoutSessionScreen({
 
   const handleAddSet = () => {
     if (!focusExercise) return;
-    const w = parseFloat(weight);
+    const wDisplay = parseFloat(weight);
     const r = parseInt(reps);
-    if (isNaN(w) || isNaN(r) || w <= 0 || r <= 0) return;
+    // Allow 0 as valid input (for bodyweight exercises, planks, etc.)
+    if (weight === '' || reps === '' || isNaN(wDisplay) || isNaN(r) || wDisplay < 0 || r < 0) return;
 
-    onAddSet(focusExercise.id, w, r, restTimerElapsed > 0 ? restTimerElapsed : undefined);
+    // Convert from display unit to kg (canonical) for storage
+    const wKg = convertDisplayToKg(wDisplay);
     
-    // Prefill with the set we just added (for next set)
-    setWeight(w.toString());
+    onAddSet(focusExercise.id, wKg, r, restTimerElapsed > 0 ? restTimerElapsed : undefined);
+    
+    // Prefill with the set we just added (for next set) - keep in display unit
+    setWeight(wDisplay.toString());
     setReps(r.toString());
     
     // Start rest timer after adding set
@@ -191,18 +388,116 @@ export function WorkoutSessionScreen({
 
   const handleCompleteExercise = () => {
     if (!focusExercise) return;
-    onCompleteExercise(focusExercise.id);
     
-    // Move to next incomplete exercise
-    const currentIndex = exercises.findIndex(ex => ex.id === focusExercise.id);
-    const nextIncomplete = exercises.slice(currentIndex + 1).find(ex => !ex.isComplete);
-    if (nextIncomplete) {
-      setProgressionExerciseId(nextIncomplete.id);
-      setInteractionFocusExerciseId(nextIncomplete.id);
+    // If part of a group, complete the whole group
+    if (activeGroupId && activeGroupMembers.length > 1 && onCompleteGroup) {
+      onCompleteGroup(activeGroupMembers.map(ex => ex.id));
     } else {
-      // No more incomplete exercises
+      onCompleteExercise(focusExercise.id);
+    }
+    
+    // Auto-advance to next incomplete session item
+    const currentItemIndex = sessionItems.findIndex(item => item.id === activeItemId);
+    const nextIncompleteItem = sessionItems.slice(currentItemIndex + 1).find(item => !item.isComplete);
+    
+    if (nextIncompleteItem) {
+      // Set active item - use first exercise ID in the item to determine focus
+      const firstExerciseId = nextIncompleteItem.exerciseIds[0];
+      const nextExercise = exercises.find(ex => ex.id === firstExerciseId);
+      if (nextExercise) {
+        setProgressionExerciseId(nextExercise.id);
+        setInteractionFocusExerciseId(nextExercise.id);
+        // Update last focused for UI state persistence
+        lastFocusedExerciseIdRef.current = nextExercise.id;
+      }
+    } else {
+      // No more incomplete items - preserve the current focus before clearing
+      // Store the exercise that was just completed as the last focused
+      if (interactionFocusExerciseId) {
+        lastFocusedExerciseIdRef.current = interactionFocusExerciseId;
+      }
       setProgressionExerciseId(null);
       setInteractionFocusExerciseId(null);
+    }
+  };
+
+  const handleSetActiveItem = (itemId: string) => {
+    const item = sessionItems.find(i => i.id === itemId);
+    if (!item) return;
+    
+    // Set focus to first exercise in the item
+    const firstExerciseId = item.exerciseIds[0];
+    const exercise = exercises.find(ex => ex.id === firstExerciseId);
+    if (exercise) {
+      setInteractionFocusExerciseId(exercise.id);
+      // Store as last focused for UI state persistence
+      lastFocusedExerciseIdRef.current = exercise.id;
+      if (!exercise.isComplete) {
+        setProgressionExerciseId(exercise.id);
+      }
+    }
+  };
+
+  // Render inactive card (dulled, minimal info, tappable)
+  const renderInactiveItem = (item: SessionItem) => {
+    const itemExercises = exercises.filter(ex => item.exerciseIds.includes(ex.id));
+    const isCompleted = item.isComplete;
+    
+    if (item.type === 'superset') {
+      // Superset inactive card
+      const firstExercise = itemExercises[0];
+      const lastSet = itemExercises
+        .flatMap(ex => ex.sets)
+        .sort((a, b) => b.timestamp - a.timestamp)[0];
+      
+      return (
+        <div className={`px-4 py-4 rounded-lg border transition-all ${
+          isCompleted 
+            ? 'bg-surface/20 border-border-subtle/50 opacity-50' 
+            : 'bg-surface/30 border-border-subtle hover:bg-surface/40 opacity-60'
+        }`}>
+          <p className={`text-base ${isCompleted ? 'text-text-muted' : 'text-text-primary'}`}>
+            Group · {itemExercises.length} exercises
+          </p>
+          {lastSet ? (
+            <p className="text-sm text-text-muted mt-0.5">
+              {formatWeightForDisplay(lastSet.weight)} × {lastSet.reps}
+            </p>
+          ) : (
+            <p className="text-sm text-text-muted mt-0.5">Not started</p>
+          )}
+        </div>
+      );
+    } else {
+      // Single exercise inactive card
+      const exercise = itemExercises[0];
+      if (!exercise) return null;
+      
+      const lastSet = exercise.sets[exercise.sets.length - 1];
+      const lastData = lastSessionData.get(exercise.name);
+      
+      return (
+        <div className={`px-4 py-4 rounded-lg border transition-all ${
+          isCompleted 
+            ? 'bg-surface/20 border-border-subtle/50 opacity-50' 
+            : 'bg-surface/30 border-border-subtle hover:bg-surface/40 opacity-60'
+        }`}>
+          <p className={`text-base ${isCompleted ? 'text-text-muted' : 'text-text-primary'}`}>
+            {exercise.name}
+          </p>
+          {lastSet ? (
+            <p className="text-sm text-text-muted mt-0.5">
+              {formatWeightForDisplay(lastSet.weight)} × {lastSet.reps}
+            </p>
+          ) : lastData ? (
+            <p className="text-sm text-text-muted mt-0.5">
+              Not started · {formatRelativeTime(lastData.date)}
+            </p>
+          ) : (
+            <p className="text-sm text-text-muted mt-0.5">Not started</p>
+          )}
+        </div>
+      );
     }
   };
 
@@ -256,7 +551,24 @@ export function WorkoutSessionScreen({
     setInteractionFocusExerciseId(exerciseId);
     const exercise = exercises.find(ex => ex.id === exerciseId);
     if (exercise && !exercise.isComplete) {
-      setProgressionExerciseId(exerciseId);
+      // If exercise is part of a group, focus on the group
+      if (exercise.groupId) {
+        const groupMembers = exercises.filter(ex => ex.groupId === exercise.groupId);
+        // Focus on the first member of the group
+        const firstMember = groupMembers.sort((a, b) => {
+          const indexA = exercises.findIndex(e => e.id === a.id);
+          const indexB = exercises.findIndex(e => e.id === b.id);
+          return indexA - indexB;
+        })[0];
+        if (firstMember) {
+          setProgressionExerciseId(firstMember.id);
+          setInteractionFocusExerciseId(firstMember.id);
+          // Update last focused for UI state persistence
+          lastFocusedExerciseIdRef.current = firstMember.id;
+        }
+      } else {
+        setProgressionExerciseId(exerciseId);
+      }
     }
   };
 
@@ -264,12 +576,10 @@ export function WorkoutSessionScreen({
     // Set interaction focus to the completed exercise for editing
     // Do NOT change completion state or progression
     setInteractionFocusExerciseId(exerciseId);
+    // Store as last focused for UI state persistence
+    lastFocusedExerciseIdRef.current = exerciseId;
   };
 
-  const handleCancelEdit = () => {
-    // Restore focus to progression exercise
-    setInteractionFocusExerciseId(progressionExerciseId);
-  };
 
   const handleTabClick = (tabId: string) => {
     setExerciseListTab(tabId as 'upcoming' | 'completed');
@@ -283,8 +593,10 @@ export function WorkoutSessionScreen({
       onAddExercise(name.trim());
       setShowAddExercise(false);
       // If we were in the "all exercises completed" state, refocus on the new exercise
+      // The focus will be set automatically by the useEffect that handles exercise addition
+      // But we should clear the stored last focused ID since we're adding a new exercise
       if (!focusExercise) {
-        // The new exercise will be added and focus will be set automatically
+        lastFocusedExerciseIdRef.current = null;
       }
     }
   };
@@ -308,23 +620,174 @@ export function WorkoutSessionScreen({
     e.preventDefault();
     if (draggedIndex === null || draggedIndex === index) return;
 
-    const reorderedUpcoming = [...upcomingExercises];
-    const draggedItem = reorderedUpcoming[draggedIndex];
-    reorderedUpcoming.splice(draggedIndex, 1);
-    reorderedUpcoming.splice(index, 0, draggedItem);
+    const draggedItem = upcomingExercises[draggedIndex];
+    const targetItem = upcomingExercises[index];
     
-    // Reconstruct full exercise list
-    const newExercises = [
-      ...completedExercises,
-      ...(progressionExercise ? [progressionExercise] : []),
-      ...reorderedUpcoming,
-    ];
+    // Check if hovering over a row (not between rows) for combine
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const mouseY = e.clientY;
+    const rowCenter = rect.top + rect.height / 2;
+    const isOverRow = Math.abs(mouseY - rowCenter) < rect.height * 0.4; // Within 40% of row center
     
-    onReorderExercises(newExercises);
-    setDraggedIndex(index);
+    if (isOverRow && draggedItem.id !== targetItem.id) {
+      // Hovering over a row - check for combine
+      if (combineTargetIndex !== index) {
+        setCombineTargetIndex(index);
+        setHoverStartTime(Date.now());
+        
+        // Clear existing timeout
+        if (hoverTimeoutRef.current) {
+          clearTimeout(hoverTimeoutRef.current);
+        }
+        
+        // Set combine mode after 300ms hover
+        hoverTimeoutRef.current = setTimeout(() => {
+          setIsCombining(true);
+        }, 300);
+      }
+    } else {
+      // Hovering between rows or same row - cancel combine
+      if (combineTargetIndex === index) {
+        setCombineTargetIndex(null);
+        setIsCombining(false);
+        if (hoverTimeoutRef.current) {
+          clearTimeout(hoverTimeoutRef.current);
+          hoverTimeoutRef.current = null;
+        }
+      }
+      
+      // Normal reorder behavior
+      if (!isCombining) {
+        const reorderedUpcoming = [...upcomingExercises];
+        
+        // If dragged item is in a group, move the whole group
+        if (draggedItem.groupId && onGroupExercises) {
+          const groupMembers = upcomingExercises.filter(ex => ex.groupId === draggedItem.groupId);
+          // Remove all group members
+          groupMembers.forEach(member => {
+            const memberIndex = reorderedUpcoming.findIndex(ex => ex.id === member.id);
+            if (memberIndex !== -1) {
+              reorderedUpcoming.splice(memberIndex, 1);
+            }
+          });
+          // Insert group at target position
+          const insertIndex = Math.min(index, reorderedUpcoming.length);
+          reorderedUpcoming.splice(insertIndex, 0, ...groupMembers);
+        } else {
+          // Normal reorder for ungrouped exercise
+          reorderedUpcoming.splice(draggedIndex, 1);
+          reorderedUpcoming.splice(index, 0, draggedItem);
+        }
+        
+        // Reconstruct full exercise list
+        const newExercises = [
+          ...completedExercises,
+          ...(progressionExercise ? [progressionExercise] : []),
+          ...reorderedUpcoming,
+        ];
+        
+        onReorderExercises(newExercises);
+        setDraggedIndex(index);
+      }
+    }
   };
 
-  const handleDragEnd = () => {
+  const handleDragEnd = (e: React.DragEvent) => {
+    // Clear hover timeout
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+      hoverTimeoutRef.current = null;
+    }
+    
+    // Handle combine drop
+    if (isCombining && combineTargetIndex !== null && draggedIndex !== null) {
+      const draggedItem = upcomingExercises[draggedIndex];
+      const targetItem = upcomingExercises[combineTargetIndex];
+      
+      if (draggedItem && targetItem && onGroupExercises && onAddToGroup && onMergeGroups) {
+        const draggedGroupInfo = getGroupInfo(exercises, draggedItem.id);
+        const targetGroupInfo = getGroupInfo(exercises, targetItem.id);
+        
+        if (!draggedGroupInfo.groupId && !targetGroupInfo.groupId) {
+          // Neither grouped - create new group
+          onGroupExercises([draggedItem.id, targetItem.id]);
+        } else if (draggedGroupInfo.groupId && !targetGroupInfo.groupId) {
+          // Dragged is grouped, target is not - add target to group
+          onAddToGroup(draggedGroupInfo.groupId, targetItem.id);
+        } else if (!draggedGroupInfo.groupId && targetGroupInfo.groupId) {
+          // Target is grouped, dragged is not - add dragged to group
+          onAddToGroup(targetGroupInfo.groupId, draggedItem.id);
+        } else if (draggedGroupInfo.groupId && targetGroupInfo.groupId) {
+          // Both grouped - merge groups
+          if (draggedGroupInfo.groupId !== targetGroupInfo.groupId) {
+            onMergeGroups(draggedGroupInfo.groupId, targetGroupInfo.groupId);
+          }
+        }
+      }
+    }
+    
+    // Reset drag state
+    setDraggedIndex(null);
+    setCombineTargetIndex(null);
+    setIsCombining(false);
+    setIsDraggingOverActive(false);
+    setHoverStartTime(null);
+  };
+  
+  const handleDragOverActiveExercise = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (draggedIndex === null || !progressionExercise) return;
+    
+    setIsDraggingOverActive(true);
+    setIsCombining(true);
+  };
+  
+  const handleDragLeaveActiveExercise = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOverActive(false);
+    setIsCombining(false);
+  };
+  
+  const handleDropOnActiveExercise = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (draggedIndex === null || !progressionExercise || !onGroupExercises || !onAddToGroup || !onMergeGroups) {
+      setIsDraggingOverActive(false);
+      setIsCombining(false);
+      return;
+    }
+    
+    const draggedItem = upcomingExercises[draggedIndex];
+    if (!draggedItem) {
+      setIsDraggingOverActive(false);
+      setIsCombining(false);
+      return;
+    }
+    
+    const draggedGroupInfo = getGroupInfo(exercises, draggedItem.id);
+    const activeGroupInfo = getGroupInfo(exercises, progressionExercise.id);
+    
+    if (!draggedGroupInfo.groupId && !activeGroupInfo.groupId) {
+      // Neither grouped - create new group
+      onGroupExercises([draggedItem.id, progressionExercise.id]);
+    } else if (draggedGroupInfo.groupId && !activeGroupInfo.groupId) {
+      // Dragged is grouped, active is not - add active to group
+      onAddToGroup(draggedGroupInfo.groupId, progressionExercise.id);
+    } else if (!draggedGroupInfo.groupId && activeGroupInfo.groupId) {
+      // Active is grouped, dragged is not - add dragged to group
+      onAddToGroup(activeGroupInfo.groupId, draggedItem.id);
+    } else if (draggedGroupInfo.groupId && activeGroupInfo.groupId) {
+      // Both grouped - merge groups
+      if (draggedGroupInfo.groupId !== activeGroupInfo.groupId) {
+        onMergeGroups(draggedGroupInfo.groupId, activeGroupInfo.groupId);
+      }
+    }
+    
+    setIsDraggingOverActive(false);
+    setIsCombining(false);
     setDraggedIndex(null);
   };
 
@@ -399,397 +862,284 @@ export function WorkoutSessionScreen({
     setIsDraggingFromHandle(false);
   };
 
-  if (!focusExercise) {
-    return (
-      <div className="h-screen flex flex-col">
-        <TopBar title={workoutName} onBack={onBack} />
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center space-y-3 w-full max-w-sm px-5">
-            <p className="text-text-muted">All exercises completed!</p>
-            <Button variant="primary" onClick={onFinishWorkout} className="w-full">
-              Finish Workout
-            </Button>
-            <Button variant="neutral" onClick={() => setShowAddExercise(true)} className="w-full">
-              <Plus className="w-4 h-4 mr-2 inline" />
-              Add Another Exercise
-            </Button>
-          </div>
-        </div>
+  // When all exercises are complete, ensure we have a focus so the session screen remains visible
+  // Use the last focused exercise, or fall back to the last exercise in the list
+  useEffect(() => {
+    if (!focusExercise && exercises.length > 0) {
+      // All exercises are complete - set focus to last exercise or stored last focused
+      if (lastFocusedExerciseIdRef.current) {
+        const lastFocusedId = lastFocusedExerciseIdRef.current;
+        const lastFocusedExercise = exercises.find(ex => ex.id === lastFocusedId);
+        if (lastFocusedExercise) {
+          setInteractionFocusExerciseId(lastFocusedId);
+          return;
+        }
+      }
+      // Fallback to last exercise
+      const lastExercise = exercises[exercises.length - 1];
+      if (lastExercise) {
+        setInteractionFocusExerciseId(lastExercise.id);
+        lastFocusedExerciseIdRef.current = lastExercise.id;
+      }
+    }
+  }, [focusExercise, exercises]);
 
-        {/* Add Exercise Bottom Sheet - available even when all exercises are completed */}
-        <ExerciseSearchBottomSheet
-          isOpen={showAddExercise}
-          onClose={() => {
-            setShowAddExercise(false);
+  // Render active item (full controls visible)
+  const renderActiveItem = (item: SessionItem) => {
+    if (item.type === 'superset' && item.exerciseIds.length >= 2 && onAddSupersetSet && onCompleteGroup) {
+      // Active superset block
+      const groupId = item.id;
+      return (
+        <SupersetBlock
+          groupId={groupId}
+          exercises={exercises}
+          lastSessionData={lastSessionData}
+          onAddSet={onAddSupersetSet}
+          onCompleteGroup={onCompleteGroup}
+          onDeleteSet={onDeleteSet}
+          restTimerStart={restTimerStart}
+          restTimerElapsed={restTimerElapsed}
+          onRestTimerChange={(start) => setRestTimerStart(start)}
+          onAddToGroup={() => {
+            setActiveGroupIdForManagement(groupId);
+            setShowPairAnother(true);
+            // Set focus to first member of group for PairWithSheet
+            const firstMember = exercises.find(ex => ex.groupId === groupId);
+            if (firstMember) {
+              setInteractionFocusExerciseId(firstMember.id);
+            }
           }}
-          title="Add Exercise"
-        >
-          <ExerciseSearch
-            onSelectExercise={handleAddExerciseFromModal}
-            onAddNewExercise={handleAddNewExercise}
-            placeholder="Search exercises..."
-            autoFocus={true}
-            showDetails={true}
-            createButtonLabel="Create & add"
-          />
-        </ExerciseSearchBottomSheet>
-      </div>
-    );
-  }
+          onRemoveFromGroup={(exerciseId) => {
+            if (onUngroup) {
+              onUngroup(exerciseId);
+            }
+            // Check if group should be dissolved
+            const remainingMembers = exercises.filter(
+              ex => ex.groupId === groupId && ex.id !== exerciseId
+            );
+            if (remainingMembers.length < 2) {
+              // Dissolve group - ungroup remaining member
+              remainingMembers.forEach(member => {
+                if (onUngroup) {
+                  onUngroup(member.id);
+                }
+              });
+            }
+          }}
+          onSwapExerciseInGroup={(exerciseId) => {
+            setActiveGroupIdForManagement(groupId);
+            setExerciseToSwapId(exerciseId);
+            setShowSwapExerciseInSuperset(true);
+          }}
+          onSkipExerciseInGroup={(exerciseId) => {
+            onSkipExercise(exerciseId);
+          }}
+          onUpdateSet={onUpdateSet}
+          onSelectSet={(exerciseId, setId, setIndex) => {
+            // Set focus to this exercise so it remains active/expanded during editing
+            const exercise = exercises.find(ex => ex.id === exerciseId);
+            if (exercise) {
+              setInteractionFocusExerciseId(exerciseId);
+            }
+            setSelectedSetId(setId);
+            setSelectedSetExerciseId(exerciseId);
+            setShowManageSetSheet(true);
+          }}
+        />
+      );
+    } else {
+      // Active single exercise card
+      const exerciseId = item.exerciseIds[0];
+      const exercise = exercises.find(ex => ex.id === exerciseId);
+      if (!exercise) return null;
 
-  return (
-    <div className="h-screen flex flex-col bg-panel">
-      <TopBar title={workoutName} onBack={onBack} />
-      
-      <div className="flex-1 overflow-y-auto">
-        <div className="max-w-2xl mx-auto px-6 py-6 space-y-6">
-          {/* Progression Exercise Card */}
-          <div className="bg-surface rounded-2xl border border-border-subtle p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-semibold">{focusExercise.name}</h2>
-              <div className="flex items-center gap-2">
-                {focusExercise.isComplete && (
-                  <div className="flex items-center gap-2">
-                    <Edit2 className="w-4 h-4 text-accent" />
-                    <p className="text-sm">Editing completed exercise</p>
+      return (
+        <div className="bg-surface rounded-2xl border border-border-subtle p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-semibold">{exercise.name}</h2>
+            {!exercise.isComplete && (
+              <button 
+                onClick={() => {
+                  setOverflowExerciseId(exercise.id);
+                  setShowExerciseOverflowSheet(true);
+                }}
+                className="p-1.5 text-text-muted hover:text-text-primary transition-colors rounded-lg hover:bg-surface/50"
+              >
+                <MoreHorizontal className="w-5 h-5" />
+              </button>
+            )}
+          </div>
+
+          {/* Set logging inputs */}
+          <div className="space-y-3">
+            <RepsWeightGrid
+              weight={weight}
+              reps={reps}
+              onWeightChange={setWeight}
+              onRepsChange={setReps}
+              weightAutoFocus={true}
+            />
+
+            <div className="flex gap-3">
+              <Button
+                variant="primary"
+                onClick={handleAddSet}
+                disabled={weight === '' || reps === '' || isNaN(parseFloat(weight)) || isNaN(parseInt(reps)) || parseFloat(weight) < 0 || parseInt(reps) < 0}
+                className="flex-1"
+              >
+                Log Set
+              </Button>
+              {exercise.sets.length > 0 && (
+                exercise.isComplete ? (
+                  // Muted "Done" state for completed exercises
+                  <div className="flex items-center gap-2 px-3 py-2 text-sm text-text-muted bg-surface/50 rounded-lg border border-border-subtle">
+                    <Check className="w-4 h-4" />
+                    <span>Done</span>
                   </div>
-                )}
-                {focusExercise.isComplete && (
-                  <button
-                    onClick={handleCancelEdit}
-                    className="text-sm text-accent hover:text-accent/80 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                )}
-                {!focusExercise.isComplete && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button className="p-1.5 text-text-muted hover:text-text-primary transition-colors rounded-lg hover:bg-surface/50">
-                        <MoreHorizontal className="w-5 h-5" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-48">
-                      <DropdownMenuItem
-                        onClick={() => {
-                          handleSkipExercise(focusExercise.id);
-                        }}
-                        className="cursor-pointer"
-                      >
-                        <SkipForward className="w-4 h-4 mr-2" />
-                        Skip Exercise
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={() => {
-                          handleDeferExercise(focusExercise.id);
-                        }}
-                        className="cursor-pointer"
-                      >
-                        <ListEnd className="w-4 h-4 mr-2" />
-                        Defer to End
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={() => {
-                          setShowSwapExercise(true);
-                        }}
-                        className="cursor-pointer"
-                      >
-                        <ArrowRightLeft className="w-4 h-4 mr-2" />
-                        Swap Exercise
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
-              </div>
-            </div>
-
-            {/* Rest Timer or Last Session Info */}
-            {restTimerStart !== null && focusExercise.sets.length > 0 ? (
-              <div className="flex items-center justify-between px-3 py-2 bg-surface/50 rounded-lg border border-border-subtle">
-                <div className="flex items-center gap-3">
-                  <Clock className="w-4 h-4 text-text-muted" />
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-text-muted">Since last set</p>
-                    <p className="text-lg tabular-nums">
-                      {Math.floor(restTimerElapsed / 60)}:{(restTimerElapsed % 60).toString().padStart(2, '0')}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => {
-                    setRestTimerStart(null);
-                    setRestTimerElapsed(0);
-                  }}
-                  className="p-1.5 text-text-muted hover:text-text-primary transition-colors rounded-lg hover:bg-surface"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            ) : (() => {
-              const lastData = lastSessionData.get(focusExercise.name);
-              return lastData ? (
-                <button
-                  onClick={() => {
-                    // Auto-fill weight from last session (lowest weight)
-                    if (lastData.sets.length > 0) {
-                      const lowestWeight = Math.min(...lastData.sets.map(s => s.weight));
-                      setWeight(lowestWeight.toString());
-                    }
-                  }}
-                  className="w-full px-3 py-2 bg-surface/50 rounded-lg border border-border-subtle text-left hover:bg-surface/70 transition-colors"
-                >
-                  <p className="text-xs uppercase tracking-wide text-text-muted mb-1">
-                    Last Session · {formatRelativeTime(lastData.date)}
-                  </p>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {lastData.sets.map((set, idx) => (
-                      <span key={idx} className="text-sm text-text-primary">
-                        {formatWeight(set.weight)} × {set.reps}
-                      </span>
-                    ))}
-                  </div>
-                </button>
-              ) : null;
-            })()}
-
-            {/* Set logging inputs - at top for priority */}
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  placeholder="Weight (kg)"
-                  value={weight}
-                  onChange={(e) => setWeight(e.target.value)}
-                  autoFocus
-                />
-                <Input
-                  type="number"
-                  inputMode="numeric"
-                  placeholder="Reps"
-                  value={reps}
-                  onChange={(e) => setReps(e.target.value)}
-                />
-              </div>
-
-              <div className="flex gap-3">
-                <Button
-                  variant="primary"
-                  onClick={handleAddSet}
-                  disabled={!weight || !reps || parseFloat(weight) <= 0 || parseInt(reps) <= 0}
-                  className="flex-1"
-                >
-                  Add Set
-                </Button>
-                {!focusExercise.isComplete && focusExercise.sets.length > 0 && (
+                ) : (
+                  // Active "Done" button for incomplete exercises
                   <Button
                     variant="neutral"
                     onClick={handleCompleteExercise}
-                    disabled={focusExercise.sets.length === 0}
+                    disabled={exercise.sets.length === 0}
                   >
                     <Check className="w-4 h-4 mr-2 inline" />
                     Done
                   </Button>
-                )}
-              </div>
+                )
+              )}
             </div>
 
-            {/* Sets list - below inputs */}
-            {focusExercise.sets.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-xs uppercase tracking-wide text-text-muted">Sets</p>
-                {focusExercise.sets.map((set, index) => (
-                  <div
-                    key={set.id}
-                    className="flex items-center justify-between p-3 bg-panel rounded-lg border border-border-subtle"
-                  >
-                    <div className="flex items-center gap-4">
-                      <span className="text-text-muted w-8">#{index + 1}</span>
-                      <span className="text-text-primary">
-                        {formatWeight(set.weight)} × {set.reps} reps
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => handleDeleteSet(set.id)}
-                      className="text-text-muted hover:text-danger transition-colors p-1"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+            {/* Last session chips - below inputs (only shown when no sets logged yet) */}
+            {/* Visibility: ONLY show when exercise has 0 committed sets in current session */}
+            {/* Data source: lastSessionData is strictly from previous completed sessions, never current session */}
+            {exercise.sets.length === 0 && (() => {
+              const lastData = lastSessionData.get(exercise.name);
+              // Defensive check: ensure lastData exists and has valid sets from previous session
+              if (!lastData || !lastData.sets || lastData.sets.length === 0) return null;
+              
+              // Create defensive copy to prevent any mutation
+              const lastSessionCopy = {
+                sets: [...lastData.sets], // Copy array to prevent mutation
+                date: lastData.date,
+              };
+              
+              return (
+                <LastSessionStats
+                  lastSessionData={lastSessionCopy}
+                  onChipPress={(chipWeightKg, chipReps) => {
+                    // Chip tap only prefills draft inputs - does NOT log a set
+                    // Set will only be logged when user taps "Add Set" button
+                    // chipWeightKg is in kg (canonical), convert to display unit for input
+                    const displayWeight = convertKgToDisplay(chipWeightKg);
+                    setWeight(displayWeight.toString());
+                    setReps(chipReps.toString());
+                  }}
+                />
+              );
+            })()}
           </div>
 
-          {/* Exercise List */}
-          {exercises.length === 0 ? (
-            /* No exercises yet */
-            <div className="text-center py-12">
-              <p className="text-text-muted mb-4">No exercises yet</p>
-              <Button variant="primary" onClick={() => setShowAddExercise(true)}>
-                <Plus className="w-4 h-4 mr-2 inline" />
-                Add Exercise
-              </Button>
+          {/* Since last set timer - shown when sets exist, replaces last set stat position */}
+          {restTimerStart !== null && exercise.sets.length > 0 ? (
+            <div className="flex items-center justify-between px-3 py-2 bg-surface/50 rounded-lg border border-border-subtle">
+              <div className="flex items-center gap-3">
+                <Clock className="w-4 h-4 text-text-muted" />
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-text-muted">Since last set</p>
+                  <p className="text-lg tabular-nums">
+                    {Math.floor(restTimerElapsed / 60)}:{(restTimerElapsed % 60).toString().padStart(2, '0')}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setRestTimerStart(null);
+                  setRestTimerElapsed(0);
+                }}
+                className="p-1.5 text-text-muted hover:text-text-primary transition-colors rounded-lg hover:bg-surface"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
           ) : null}
 
-          {/* Persistent Bottom Sheet for Up Next & Completed */}
-          {(upcomingExercises.length > 0 || completedExercises.length > 0) && (
-            <PersistentBottomSheet
-              peekContent={
-                <div className="text-sm flex items-center gap-1">
-                  {upcomingExercises.length > 0 && (
-                    <span className="text-sm uppercase tracking-wide text-text-muted">
-                      {upcomingExercises.length} upcoming
-                    </span>
-                  )}
-                  {upcomingExercises.length > 0 && completedExercises.length > 0 && (
-                    <span className="text-text-muted">·</span>
-                  )}
-                  {completedExercises.length > 0 && (
-                    <span className={`text-sm uppercase tracking-wide text-text-muted ${animateCompleted ? 'animate-pulse-completed' : ''}`}>
-                      {completedExercises.length} COMPLETED
-                    </span>
-                  )}
-                </div>
-              }
-            >
-              {(isExpanded) => (
-                <div className="space-y-6">
-                  {/* Header with Add Exercise button - only shown when expanded */}
-                  {isExpanded && (
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        {upcomingExercises.length > 0 && (
-                          <p className="text-xs uppercase tracking-wide text-text-muted">
-                            Up Next ({upcomingExercises.length})
-                          </p>
-                        )}
-                      </div>
-                      <Button
-                        variant="primary"
-                        onClick={() => setShowAddExercise(true)}
-                        className="flex items-center gap-2"
-                        title="Add exercise"
-                      >
-                        <Plus className="w-5 h-5" />
-                        <span className="text-sm">Add exercise</span>
-                      </Button>
-                    </div>
-                  )}
-
-                  {/* Up Next Section */}
-                  {upcomingExercises.length > 0 && (
-                    <div className="space-y-2">
-                      {upcomingExercises.map((exercise, index) => {
-                        const lastData = lastSessionData.get(exercise.name);
-                        return (
-                          <div
-                            key={exercise.id}
-                            draggable
-                            onDragStart={() => handleDragStart(index)}
-                            onDragOver={(e) => handleDragOver(e, index)}
-                            onDragEnd={handleDragEnd}
-                            onTouchMove={(e) => handleRowTouchMove(e, index)}
-                            onTouchEnd={handleRowTouchEnd}
-                            className={`flex items-center gap-3 px-4 py-4 bg-surface/30 rounded-lg border border-border-subtle hover:bg-surface/50 transition-all cursor-grab active:cursor-grabbing ${
-                              draggedIndex === index ? 'opacity-50' : ''
-                            }`}
-                          >
-                            <div
-                              onTouchStart={(e) => handleHandleTouchStart(e, index)}
-                              onPointerDown={(e) => handleHandlePointerDown(e, index)}
-                              className="flex-shrink-0 drag-handle"
-                              style={{
-                                WebkitTouchCallout: 'none',
-                                WebkitUserSelect: 'none',
-                                userSelect: 'none',
-                                touchAction: 'none',
-                              }}
-                            >
-                              <GripVertical className="w-5 h-5 text-text-muted" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="truncate text-base">{exercise.name}</p>
-                              {lastData && (
-                                <p className="text-sm text-text-muted mt-0.5">
-                                  Last: {lastData.sets.length} sets · {formatRelativeTime(lastData.date)}
-                                </p>
-                              )}
-                            </div>
-                            <button
-                              onClick={() => handleSkipExercise(exercise.id)}
-                              className="text-text-muted hover:text-text-primary transition-colors p-2"
-                              title="Skip"
-                            >
-                              <SkipForward className="w-5 h-5" />
-                            </button>
-                            <button
-                              onClick={() => handleDeferExercise(exercise.id)}
-                              className="text-text-muted hover:text-text-primary transition-colors p-2"
-                              title="Defer"
-                            >
-                              <Clock className="w-5 h-5" />
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Completed Section */}
-                  {completedExercises.length > 0 && (
-                    <div>
-                      {isExpanded && (
-                        <p className="text-xs uppercase tracking-wide text-text-muted mb-3">
-                          Completed ({completedExercises.length})
-                        </p>
-                      )}
-                      <div className="space-y-2">
-                        {completedExercises.map((exercise) => (
-                          <div
-                            key={exercise.id}
-                            className="px-4 py-4 bg-surface/30 rounded-lg border border-border-subtle"
-                          >
-                            <div className="flex items-start justify-between mb-2">
-                              <div className="flex-1">
-                                <p className="mb-1 text-base">{exercise.name}</p>
-                                <p className="text-sm text-text-muted">
-                                  {exercise.sets.length} sets
-                                </p>
-                              </div>
-                              <button
-                                onClick={() => handleEditCompletedExercise(exercise.id)}
-                                className="text-text-muted hover:text-accent transition-colors p-2"
-                                title="Edit"
-                              >
-                                <Edit2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                            <div className="space-y-1">
-                              {exercise.sets.map((set, index) => (
-                                <div
-                                  key={set.id}
-                                  className="flex items-center gap-3 text-sm px-2 py-1"
-                                >
-                                  <span className="text-text-muted w-6">#{index + 1}</span>
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-text-muted">{formatWeight(set.weight)} × {set.reps} reps</span>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </PersistentBottomSheet>
+          {/* Sets list - directly below timer (only shown when sets exist) */}
+          {exercise.sets.length > 0 && (
+            <CompletedSetsPanel
+              sets={exercise.sets}
+              onSelectSet={(setId, setIndex) => {
+                // Set focus to this exercise so it remains active/expanded during editing
+                setInteractionFocusExerciseId(exercise.id);
+                setSelectedSetId(setId);
+                setSelectedSetExerciseId(exercise.id);
+                setShowManageSetSheet(true);
+              }}
+              exerciseId={exercise.id}
+            />
           )}
         </div>
+      );
+    }
+  };
+
+  // Render finish button section (minimal tail section)
+  // Button prominence: Log set > Done > Finish workout > Add exercise
+  const renderControlsSection = () => {
+    return (
+      <div className="pt-4 space-y-3">
+        <Button
+          variant="neutral"
+          onClick={() => setShowFinishConfirmation(true)}
+          className="w-full"
+        >
+          Finish workout
+        </Button>
+        <button
+          onClick={() => setShowAddExercise(true)}
+          className="w-full text-sm text-text-muted border border-border-subtle rounded-lg py-2.5 px-4 bg-transparent hover:bg-surface/40 hover:border-border-medium transition-colors"
+        >
+          <Plus className="w-4 h-4 mr-2 inline" />
+          Add exercise
+        </button>
       </div>
+    );
+  };
+
+  return (
+    <div className="h-screen flex flex-col bg-panel">
+      <TopBar
+        title={workoutName}
+        onBack={onBack}
+        rightAction={
+          startedAt ? (
+            <div className="text-sm tabular-nums text-text-muted">
+              {elapsedLabel}
+            </div>
+          ) : null
+        }
+      />
+      
+      {exercises.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center py-12">
+            <p className="text-text-muted mb-4">No exercises yet</p>
+            <Button variant="primary" onClick={() => setShowAddExercise(true)}>
+              <Plus className="w-4 h-4 mr-2 inline" />
+              Add Exercise
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <SessionScrollLayout
+          items={sessionItems}
+          activeItemId={activeItemId}
+          onSetActiveItem={handleSetActiveItem}
+          renderActiveItem={renderActiveItem}
+          renderInactiveItem={renderInactiveItem}
+          renderControlsSection={renderControlsSection}
+        />
+      )}
 
       {/* Add Exercise Bottom Sheet */}
       <ExerciseSearchBottomSheet
@@ -798,10 +1148,8 @@ export function WorkoutSessionScreen({
           setShowAddExercise(false);
         }}
         title="Add Exercise"
-        onScrollStart={() => addExerciseSearchRef.current?.blur()}
       >
         <ExerciseSearch
-          ref={addExerciseSearchRef}
           onSelectExercise={handleAddExerciseFromModal}
           onAddNewExercise={handleAddNewExercise}
           placeholder="Search exercises..."
@@ -867,16 +1215,67 @@ export function WorkoutSessionScreen({
         </Modal>
       )}
 
+      {/* Pair With Bottom Sheet */}
+      {focusExercise && onGroupExercises && (
+        <PairWithSheet
+          isOpen={showPairWith}
+          onClose={() => {
+            setShowPairWith(false);
+            // Restore focus to progression exercise after closing
+            if (progressionExercise) {
+              setInteractionFocusExerciseId(progressionExercise.id);
+            }
+          }}
+          activeExercise={focusExercise}
+          allExercises={exercises}
+          onSelectExercise={(exerciseId) => {
+            const selectedExercise = exercises.find(ex => ex.id === exerciseId);
+            if (!selectedExercise) return;
+            
+            const activeGroupInfo = getGroupInfo(exercises, focusExercise.id);
+            const selectedGroupInfo = getGroupInfo(exercises, exerciseId);
+            
+            if (!activeGroupInfo.groupId && !selectedGroupInfo.groupId) {
+              // Neither is grouped - create new group
+              if (onGroupExercises) {
+                onGroupExercises([focusExercise.id, exerciseId]);
+              }
+            } else if (activeGroupInfo.groupId && !selectedGroupInfo.groupId) {
+              // Active is grouped, selected is not - add to group
+              if (onAddToGroup) {
+                onAddToGroup(activeGroupInfo.groupId, exerciseId);
+              }
+            } else if (!activeGroupInfo.groupId && selectedGroupInfo.groupId) {
+              // Selected is grouped, active is not - add to group
+              if (onAddToGroup) {
+                onAddToGroup(selectedGroupInfo.groupId, focusExercise.id);
+              }
+            } else if (activeGroupInfo.groupId && selectedGroupInfo.groupId) {
+              // Both are grouped - merge groups
+              if (onMergeGroups && activeGroupInfo.groupId !== selectedGroupInfo.groupId) {
+                onMergeGroups(activeGroupInfo.groupId, selectedGroupInfo.groupId);
+              }
+            }
+          }}
+          onAddNewExerciseAndPair={(exerciseName) => {
+            // Add exercise and pair it with the active exercise
+            if (focusExercise) {
+              onAddExercise(exerciseName, focusExercise.id);
+            } else {
+              onAddExercise(exerciseName);
+            }
+          }}
+        />
+      )}
+
       {/* Swap Exercise Bottom Sheet */}
       {focusExercise && (
         <ExerciseSearchBottomSheet
           isOpen={showSwapExercise}
           onClose={() => setShowSwapExercise(false)}
           title={`Swap "${focusExercise.name}"`}
-          onScrollStart={() => swapExerciseSearchRef.current?.blur()}
         >
           <ExerciseSearch
-            ref={swapExerciseSearchRef}
             onSelectExercise={(exerciseName) => {
               handleSwapExercise(exerciseName);
             }}
@@ -909,6 +1308,245 @@ export function WorkoutSessionScreen({
           />
         </ExerciseSearchBottomSheet>
       )}
+
+      {/* Pair Another Sheet for Superset */}
+      {activeGroupIdForManagement && focusExercise && (
+        <PairWithSheet
+          isOpen={showPairAnother}
+          onClose={() => {
+            setShowPairAnother(false);
+            setActiveGroupIdForManagement(null);
+          }}
+          activeExercise={focusExercise}
+          allExercises={exercises}
+          onSelectExercise={(exerciseId) => {
+            if (onAddToGroup && activeGroupIdForManagement) {
+              onAddToGroup(activeGroupIdForManagement, exerciseId);
+            }
+            setShowPairAnother(false);
+            setActiveGroupIdForManagement(null);
+          }}
+          onAddNewExerciseAndPair={(exerciseName) => {
+            if (activeGroupIdForManagement) {
+              onAddExercise(exerciseName, activeGroupIdForManagement);
+            }
+            setShowPairAnother(false);
+            setActiveGroupIdForManagement(null);
+          }}
+        />
+      )}
+
+      {/* Swap Exercise in Superset Sheet */}
+      {activeGroupIdForManagement && (
+        <SwapExerciseSheet
+          isOpen={showSwapExerciseInSuperset}
+          onClose={() => {
+            setShowSwapExerciseInSuperset(false);
+            setActiveGroupIdForManagement(null);
+            setExerciseToSwapId(null);
+          }}
+          groupMembers={exercises.filter(ex => ex.groupId === activeGroupIdForManagement)}
+          allExercises={exercises}
+          initialExerciseToReplace={exerciseToSwapId || undefined}
+          onSwapWithExisting={(exerciseIdToReplace, replacementExerciseId) => {
+            // Check if replacement is already grouped
+            const replacement = exercises.find(ex => ex.id === replacementExerciseId);
+            if (replacement && replacement.groupId) {
+              // Show error - replacement is already in a group
+              // TODO: Show toast/error message "Already in a group"
+              console.warn('[SwapExercise] Replacement is already in a group', {
+                replacementExerciseId,
+                existingGroupId: replacement.groupId,
+              });
+              return; // Don't proceed with swap
+            }
+            
+            // Use dedicated swap function
+            if (onSwapGroupMember && activeGroupIdForManagement && exerciseIdToReplace) {
+              onSwapGroupMember(activeGroupIdForManagement, exerciseIdToReplace, replacementExerciseId);
+            }
+            setShowSwapExerciseInSuperset(false);
+            setActiveGroupIdForManagement(null);
+            setExerciseToSwapId(null);
+          }}
+          onAddNewExerciseAndSwap={(exerciseIdToReplace, newExerciseName) => {
+            // Add new exercise and swap it in atomically
+            if (activeGroupIdForManagement && exerciseIdToReplace) {
+              onAddExercise(newExerciseName, undefined, exerciseIdToReplace, activeGroupIdForManagement);
+            }
+            setShowSwapExerciseInSuperset(false);
+            setActiveGroupIdForManagement(null);
+            setExerciseToSwapId(null);
+          }}
+        />
+      )}
+
+      {/* Standalone exercise overflow bottom sheet */}
+      {overflowExerciseId && (
+        <CompactBottomSheet
+          isOpen={showExerciseOverflowSheet}
+          onClose={() => {
+            setShowExerciseOverflowSheet(false);
+            setOverflowExerciseId(null);
+          }}
+        >
+          {(() => {
+            const exercise = exercises.find(ex => ex.id === overflowExerciseId);
+            if (!exercise) return null;
+            
+            const groupInfo = getGroupInfo(exercises, exercise.id);
+            const actions = [
+              {
+                label: 'Swap exercise',
+                icon: ArrowRightLeft,
+                onPress: () => {
+                  setShowSwapExercise(true);
+                  setShowExerciseOverflowSheet(false);
+                  setOverflowExerciseId(null);
+                },
+              },
+            ];
+            
+            // Pair with (conditional: only if grouping is supported and exercise is not already in a group)
+            if (onGroupExercises && !groupInfo.groupId) {
+              actions.push({
+                label: 'Pair with',
+                icon: Link2,
+                onPress: () => {
+                  setShowPairWith(true);
+                  setShowExerciseOverflowSheet(false);
+                  setOverflowExerciseId(null);
+                },
+              });
+            }
+            
+            // Unpair (if exercise is already in a group)
+            if (onGroupExercises && groupInfo.groupId && onUngroup) {
+              actions.push({
+                label: 'Unpair',
+                icon: X,
+                onPress: () => {
+                  onUngroup(exercise.id);
+                  setShowExerciseOverflowSheet(false);
+                  setOverflowExerciseId(null);
+                },
+              });
+            }
+            
+            actions.push(
+              {
+                label: 'Defer to end',
+                icon: ListEnd,
+                onPress: () => {
+                  handleDeferExercise(exercise.id);
+                  setShowExerciseOverflowSheet(false);
+                  setOverflowExerciseId(null);
+                },
+              },
+              {
+                label: 'Skip exercise',
+                icon: SkipForward,
+                onPress: () => {
+                  handleSkipExercise(exercise.id);
+                  setShowExerciseOverflowSheet(false);
+                  setOverflowExerciseId(null);
+                },
+              }
+            );
+            
+            return <OverflowActionGroup actions={actions} />;
+          })()}
+        </CompactBottomSheet>
+      )}
+
+      {/* Manage Set Sheet */}
+      {selectedSetId && selectedSetExerciseId && (() => {
+        const exercise = exercises.find(ex => ex.id === selectedSetExerciseId);
+        const set = exercise?.sets.find(s => s.id === selectedSetId);
+        if (!exercise || !set) return null;
+        const setIndex = exercise.sets.findIndex(s => s.id === selectedSetId);
+        return (
+          <ManageSetSheet
+            isOpen={showManageSetSheet}
+            onClose={() => {
+              setShowManageSetSheet(false);
+              setSelectedSetId(null);
+              setSelectedSetExerciseId(null);
+            }}
+            exerciseId={selectedSetExerciseId}
+            set={set}
+            setIndex={setIndex}
+            onUpdateSet={onUpdateSet || (() => {})}
+            onDeleteSet={onDeleteSet}
+          />
+        );
+      })()}
+
+      {/* Remove Exercise from Superset Sheet */}
+      {activeGroupIdForManagement && (
+        <RemoveExerciseSheet
+          isOpen={showRemoveExercise}
+          onClose={() => {
+            setShowRemoveExercise(false);
+            setActiveGroupIdForManagement(null);
+          }}
+          groupMembers={exercises.filter(ex => ex.groupId === activeGroupIdForManagement)}
+          onConfirm={(exerciseIdsToRemove) => {
+            exerciseIdsToRemove.forEach(exerciseId => {
+              if (onUngroup) {
+                onUngroup(exerciseId);
+              }
+            });
+            
+            // Check if group should be dissolved
+            const remainingMembers = exercises.filter(
+              ex => ex.groupId === activeGroupIdForManagement && !exerciseIdsToRemove.includes(ex.id)
+            );
+            
+            if (remainingMembers.length < 2) {
+              // Dissolve group - ungroup remaining member
+              remainingMembers.forEach(member => {
+                if (onUngroup) {
+                  onUngroup(member.id);
+                }
+              });
+            }
+            
+            setShowRemoveExercise(false);
+            setActiveGroupIdForManagement(null);
+          }}
+        />
+      )}
+
+      {/* Finish Workout Confirmation Bottom Sheet */}
+      <CompactBottomSheet
+        isOpen={showFinishConfirmation}
+        onClose={() => setShowFinishConfirmation(false)}
+        title="Finish workout?"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-text-muted">
+            You can review details on the summary.
+          </p>
+          <OverflowActionGroup
+            actions={[
+              {
+                label: 'Finish',
+                onPress: () => {
+                  setShowFinishConfirmation(false);
+                  onFinishWorkout();
+                },
+              },
+              {
+                label: 'Keep logging',
+                onPress: () => {
+                  setShowFinishConfirmation(false);
+                },
+              },
+            ]}
+          />
+        </div>
+      </CompactBottomSheet>
     </div>
   );
 }

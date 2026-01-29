@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Plus, ListPlus, Play, Database, Trash2, Settings } from 'lucide-react';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
-import { Workout } from '../types';
+import { Workout, AdHocLoggingSession } from '../types';
 import { IncompleteExerciseSession } from '../types';
 import { WorkoutTemplate } from '../types/templates';
 import { formatTimeAgo } from '../utils/storage';
@@ -12,6 +12,7 @@ import { seedAllDemoData, resetAndSeed, isDemoDataSeeded } from '../../utils/dev
 interface HomeScreenProps {
   unfinishedWorkout: Workout | null;
   incompleteExerciseSession: IncompleteExerciseSession | null;
+  adHocSession: AdHocLoggingSession | null;
   workoutTemplates: WorkoutTemplate[];
   theme: 'light' | 'dark';
   onThemeChange: (theme: 'light' | 'dark') => void;
@@ -22,14 +23,17 @@ interface HomeScreenProps {
   onLogExercise: () => void;
   onResumeWorkout: () => void;
   onResumeExercise: () => void;
+  onResumeAdHocSession: () => void;
   onDiscardWorkout: () => void;
   onDiscardExercise: () => void;
+  onDiscardAdHocSession: () => void;
   onOpenSettings: () => void;
 }
 
 export function HomeScreen({
   unfinishedWorkout,
   incompleteExerciseSession,
+  adHocSession,
   workoutTemplates,
   theme,
   onThemeChange,
@@ -41,8 +45,10 @@ export function HomeScreen({
   onLogExercise,
   onResumeWorkout,
   onResumeExercise,
+  onResumeAdHocSession,
   onDiscardWorkout,
   onDiscardExercise,
+  onDiscardAdHocSession,
   onOpenSettings,
 }: HomeScreenProps) {
 
@@ -119,7 +125,7 @@ export function HomeScreen({
         </div>
 
         {/* In Progress section */}
-        {(unfinishedWorkout || incompleteExerciseSession) && (
+        {(unfinishedWorkout || incompleteExerciseSession || adHocSession) && (
           <div className="space-y-3">
             <h2 className="text-xs uppercase tracking-wide text-text-muted px-1">In Progress</h2>
             
@@ -210,10 +216,53 @@ export function HomeScreen({
                 </div>
               </Card>
             )}
+
+            {/* Resume ad-hoc logging session card */}
+            {adHocSession && (
+              <Card gradient className="border-accent/20" onClick={onResumeAdHocSession}>
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <h3 className="mb-1 truncate">Logging Session</h3>
+                    <div className="flex flex-col gap-1">
+                      <p className="text-text-muted">
+                        {adHocSession.exercises.length} {adHocSession.exercises.length === 1 ? 'exercise' : 'exercises'}
+                      </p>
+                      <p className="text-text-muted">
+                        Started {formatTimeAgo(adHocSession.startTime)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm('Discard this logging session? This cannot be undone.')) {
+                          onDiscardAdHocSession();
+                        }
+                      }}
+                      className="p-2 rounded-lg border border-border-subtle hover:bg-surface/50 text-text-muted hover:text-danger hover:border-danger/30 transition-colors"
+                      title="Discard logging session"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                    <Button 
+                      variant="primary" 
+                      size="sm" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onResumeAdHocSession();
+                      }}
+                    >
+                      Resume
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            )}
           </div>
         )}
 
-        {/* Log single exercise */}
+        {/* Start logging */}
         <div className="space-y-3">
           <h2 className="text-xs uppercase tracking-wide text-text-muted px-1">Log</h2>
           <Card onClick={onLogExercise} gradient>
@@ -222,8 +271,8 @@ export function HomeScreen({
               <Plus className="w-6 h-6 text-accent" />
             </div>
             <div className="flex-1 min-w-0">
-              <h3 className="mb-0.5">Record exercise</h3>
-              <p className="text-text-muted">Single entry without a session</p>
+              <h3 className="mb-0.5">Start logging</h3>
+              <p className="text-text-muted">Log one or more exercises</p>
             </div>
           </div>
         </Card>

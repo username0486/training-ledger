@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Play, GripVertical, Pencil, Trash2, X, Plus, Check } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Card } from '../components/Card';
@@ -6,15 +6,17 @@ import { Button } from '../components/Button';
 import { WorkoutTemplate } from '../types/templates';
 import { formatTimeAgo } from '../utils/storage';
 import { ExerciseSearchBottomSheet } from '../components/ExerciseSearchBottomSheet';
-import { ExerciseSearch, ExerciseSearchHandle } from '../components/ExerciseSearch';
+import { ExerciseSearch } from '../components/ExerciseSearch';
 import { addExerciseToDb } from '../utils/exerciseDb';
 import { FloatingLabelInput } from '../components/FloatingLabelInput';
 import { Dumbbell } from 'lucide-react';
 import { formatWeight } from '../../utils/weightFormat';
+import { estimateWorkoutDuration, formatDurationRange } from '../utils/duration';
 
 interface ViewTemplateScreenProps {
   template: WorkoutTemplate;
   lastSessionData: Map<string, { sets: Array<{ weight: number; reps: number }>; date: number }>;
+  completedWorkouts?: Array<{ templateId?: string; durationSec?: number; endedAt?: number }>; // For duration estimation
   onBack: () => void;
   onStart: (editedExerciseNames: string[]) => void;
   onEdit: () => void;
@@ -25,6 +27,7 @@ interface ViewTemplateScreenProps {
 export function ViewTemplateScreen({
   template,
   lastSessionData,
+  completedWorkouts = [],
   onBack,
   onStart,
   onEdit,
@@ -82,8 +85,6 @@ export function ViewTemplateScreen({
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [showReplaceExercise, setShowReplaceExercise] = useState(false);
   const [replaceIndex, setReplaceIndex] = useState<number | null>(null);
-  const addExerciseSearchRef = useRef<ExerciseSearchHandle>(null);
-  const replaceExerciseSearchRef = useRef<ExerciseSearchHandle>(null);
 
   // Reset edited values only when template changes (preserve edits when toggling edit mode)
   useEffect(() => {
@@ -242,6 +243,10 @@ export function ViewTemplateScreen({
     onStart(editedExercises);
   };
 
+  // Estimate workout duration for preview
+  const exerciseCount = isEditMode ? editedExercises.length : (template.exerciseNames?.length || 0);
+  const durationEstimate = estimateWorkoutDuration(template.id, exerciseCount, completedWorkouts);
+
   return (
     <div className="flex flex-col h-full">
       <TopBar
@@ -276,7 +281,7 @@ export function ViewTemplateScreen({
         }
       />
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto pb-24">
         <div className="max-w-2xl mx-auto p-5 space-y-4">
           {/* Workout name input (only in edit mode) */}
           {isEditMode && (
@@ -351,11 +356,13 @@ export function ViewTemplateScreen({
                           Last session · {formatTimeAgo(lastSession.date)}
                         </p>
                         <div className="flex gap-3 flex-wrap">
-                          {lastSession.sets.map((set, idx) => (
-                            <span key={idx} className="text-xs">
-                              {formatWeight(set.weight)} × {set.reps}
-                            </span>
-                          ))}
+                          {lastSession.sets
+                            .filter(set => set && set.weight != null && set.reps != null)
+                            .map((set, idx) => (
+                              <span key={idx} className="text-xs">
+                                {formatWeight(set.weight)} × {set.reps}
+                              </span>
+                            ))}
                         </div>
                       </div>
                     )}
@@ -380,18 +387,25 @@ export function ViewTemplateScreen({
               </button>
             )}
           </div>
+        </div>
+      </div>
 
-          {/* Actions */}
-          <div className="space-y-3 pt-4">
-            <Button
-              variant="primary"
-              onClick={handleStart}
-              className="w-full"
-            >
-              <Play className="w-4 h-4 mr-2 inline" />
-              Record workout
-            </Button>
-          </div>
+      {/* Fixed Record workout button */}
+      <div className="fixed bottom-0 left-0 right-0 bg-panel border-t border-border-subtle p-5 z-10">
+        <div className="max-w-2xl mx-auto space-y-2">
+          {durationEstimate && (
+            <p className="text-sm text-text-muted text-center">
+              Estimated time: {formatDurationRange(durationEstimate.minSec, durationEstimate.maxSec)}
+            </p>
+          )}
+          <Button
+            variant="primary"
+            onClick={handleStart}
+            className="w-full"
+          >
+            <Play className="w-4 h-4 mr-2 inline" />
+            Record workout
+          </Button>
         </div>
       </div>
 
@@ -431,10 +445,8 @@ export function ViewTemplateScreen({
         isOpen={showAddExercise}
         onClose={() => setShowAddExercise(false)}
         title="Add Exercise"
-        onScrollStart={() => addExerciseSearchRef.current?.blur()}
       >
         <ExerciseSearch
-          ref={addExerciseSearchRef}
           onSelectExercise={handleAddExercise}
           onAddNewExercise={handleAddNewExercise}
           selectedExercises={editedExercises}
@@ -453,10 +465,8 @@ export function ViewTemplateScreen({
           setReplaceIndex(null);
         }}
         title="Replace Exercise"
-        onScrollStart={() => replaceExerciseSearchRef.current?.blur()}
       >
         <ExerciseSearch
-          ref={replaceExerciseSearchRef}
           onSelectExercise={handleReplaceSelect}
           onAddNewExercise={(name) => {
             handleReplaceSelect(name);

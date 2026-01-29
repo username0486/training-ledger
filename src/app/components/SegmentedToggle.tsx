@@ -12,6 +12,8 @@ interface SegmentedToggleProps<T> {
   value: T;
   onChange: (value: T) => void;
   ariaLabel?: string;
+  className?: string;
+  fullWidth?: boolean;
 }
 
 export function SegmentedToggle<T extends string | number>({
@@ -19,6 +21,8 @@ export function SegmentedToggle<T extends string | number>({
   value,
   onChange,
   ariaLabel,
+  className = '',
+  fullWidth = false,
 }: SegmentedToggleProps<T>) {
   const [option1, option2] = options;
   const isOption1Selected = value === option1.value;
@@ -27,7 +31,7 @@ export function SegmentedToggle<T extends string | number>({
     <div
       role="group"
       aria-label={ariaLabel}
-      className="relative inline-flex p-1 bg-surface/50 rounded-lg border border-border-subtle"
+      className={`relative inline-flex p-1 bg-surface/50 rounded-lg border border-border-subtle ${fullWidth ? 'w-full' : ''} ${className}`}
     >
       {/* Sliding background indicator */}
       <div
@@ -43,7 +47,11 @@ export function SegmentedToggle<T extends string | number>({
         type="button"
         onClick={() => onChange(option1.value)}
         className={`relative z-10 flex items-center justify-center gap-2 rounded-md transition-colors ${
-          option1.label ? 'px-4 py-2 min-w-[80px]' : 'p-2 min-w-[44px]'
+          fullWidth
+            ? 'flex-1 min-w-0 px-4 py-2'
+            : option1.label
+              ? 'px-4 py-2 min-w-[80px]'
+              : 'p-2 min-w-[44px]'
         } ${
           isOption1Selected
             ? 'text-white'
@@ -71,7 +79,11 @@ export function SegmentedToggle<T extends string | number>({
         type="button"
         onClick={() => onChange(option2.value)}
         className={`relative z-10 flex items-center justify-center gap-2 rounded-md transition-colors ${
-          option2.label ? 'px-4 py-2 min-w-[80px]' : 'p-2 min-w-[44px]'
+          fullWidth
+            ? 'flex-1 min-w-0 px-4 py-2'
+            : option2.label
+              ? 'px-4 py-2 min-w-[80px]'
+              : 'p-2 min-w-[44px]'
         } ${
           !isOption1Selected
             ? 'text-white'

@@ -61,15 +61,19 @@ export async function fetchWorkouts(): Promise<Workout[]> {
 
 export async function saveWorkout(workout: Workout): Promise<void> {
   try {
-    console.log('Attempting to save workout:', workout);
-    console.log('Serialized workout:', JSON.stringify({ workout }));
+    if (import.meta.env.DEV) {
+      console.log('Attempting to save workout:', workout);
+      console.log('Serialized workout:', JSON.stringify({ workout }));
+    }
     
     await fetchWithAuth(`${API_BASE}/user/workouts`, {
       method: 'POST',
       body: JSON.stringify({ workout }),
     });
     
-    console.log('Workout saved successfully');
+    if (import.meta.env.DEV) {
+      console.log('Workout saved successfully');
+    }
   } catch (error) {
     console.error('Failed to save workout:', error);
     throw error;

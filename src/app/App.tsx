@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Dumbbell, Edit2, List } from 'lucide-react';
 import { HomeScreen } from './screens/HomeScreen';
 import { CreateWorkoutScreen } from './screens/CreateWorkoutScreen';
@@ -9,23 +9,28 @@ import { WorkoutSummaryScreen } from './screens/WorkoutSummaryScreen';
 import { ExerciseHistoryScreen } from './screens/ExerciseHistoryScreen';
 import { HistoryScreen } from './screens/HistoryScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
+import { StartLoggingScreen } from './screens/StartLoggingScreen';
 import { Banner } from './components/Banner';
 import { Modal } from './components/Modal';
 import { ExerciseSearchBottomSheet } from './components/ExerciseSearchBottomSheet';
 import { LogExerciseSearch } from './components/LogExerciseSearch';
-import { ExerciseSearchHandle } from './components/ExerciseSearch';
 import { SessionConflictModal } from './components/SessionConflictModal';
 import { Input } from './components/Input';
 import { Button } from './components/Button';
-import { Workout, Exercise, Screen } from './types';
+import { Workout, Exercise, Screen, AdHocLoggingSession } from './types';
 import { WorkoutTemplate } from './types/templates';
 import { IncompleteExerciseSession } from './types';
-import { saveWorkouts, loadWorkouts, getUnfinishedWorkout, getWorkoutHistory, getLastSessionForExercise, saveIncompleteExerciseSession, loadIncompleteExerciseSession, saveIncompleteWorkoutId, loadIncompleteWorkoutId } from './utils/storage';
+import { saveWorkouts, loadWorkouts, getUnfinishedWorkout, getWorkoutHistory, getLastSessionForExercise, saveIncompleteExerciseSession, loadIncompleteExerciseSession, saveIncompleteWorkoutId, loadIncompleteWorkoutId, saveAdHocLoggingSession, loadAdHocLoggingSession, getActiveAdHocSession } from './utils/storage';
 import { loadTemplates, saveTemplate, deleteTemplate, saveTemplates } from './utils/templateStorage';
+import { loadState } from './storage/storageGateway';
+import { DataRecoveryScreen } from './components/DataRecoveryScreen';
 import { addExerciseToDb, loadExercisesDB, searchExercises, initializeExerciseDatabase, ExerciseDBEntry, getAllExercisesList } from './utils/exerciseDb';
+import { updateSessionClassificationAndName, generateDefaultSessionName } from './utils/sessionNaming';
 import { saveWorkout, deleteWorkouts as deleteWorkoutsApi } from './utils/api';
 import { recordSwap } from '../utils/exerciseSwapHistory';
 import { loadPreferences, getAppearance, setAppearance } from '../utils/preferences';
+import { createGroup, addToGroup, mergeGroups, ungroup, applyGroupingToSession, swapGroupMember } from './utils/exerciseGrouping';
+import { computeDurationSec } from './utils/duration';
 
 
 type AppScreen = 
@@ -33,21 +38,45 @@ type AppScreen =
   | { type: 'create-template' }
   | { type: 'view-template'; templateId: string }
   | { type: 'workout-session'; workoutId: string }
-  | { type: 'exercise-session'; exerciseName: string }
+  | { type: 'exercise-session'; exerciseName: string; previousScreen?: AppScreen }
   | { type: 'workout-summary'; workoutId: string; isJustCompleted?: boolean; isSingleExercise?: boolean; previousScreen?: AppScreen }
   | { type: 'exercise-history'; exerciseName: string; previousScreen?: AppScreen }
   | { type: 'history'; searchQuery?: string; scrollPosition?: number; restoreKey?: number }
-  | { type: 'settings'; previousScreen?: AppScreen };
+  | { type: 'settings'; previousScreen?: AppScreen }
+  | { type: 'start-logging' }
+  | { type: 'ad-hoc-session'; sessionId: string };
 
 export default function App() {
-  const [workouts, setWorkouts] = useState<Workout[]>(() => loadWorkouts());
-  const [templates, setTemplates] = useState<WorkoutTemplate[]>(() => loadTemplates());
+  // Initialize state with recovery handling
+  const [storageError, setStorageError] = useState<{ error: string; rawData?: string } | null>(null);
+  const [workouts, setWorkouts] = useState<Workout[]>([]);
+  const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
+  const [incompleteExerciseSession, setIncompleteExerciseSession] = useState<IncompleteExerciseSession | null>(null);
+  const [adHocSession, setAdHocSession] = useState<AdHocLoggingSession | null>(null);
+  
+  // Initialize app state on mount
+  useEffect(() => {
+    const result = loadState();
+    if (result.success && result.state) {
+      setWorkouts(result.state.workouts || []);
+      setTemplates(result.state.templates || []);
+      setIncompleteExerciseSession(result.state.incompleteExerciseSession ?? null);
+      setAdHocSession(result.state.adHocSession ?? null);
+      setStorageError(null);
+    } else {
+      // Load failed - show recovery screen
+      setStorageError({
+        error: result.error || 'Unknown error loading data',
+        rawData: result.rawData,
+      });
+    }
+  }, []);
+  
   const [screen, setScreen] = useState<AppScreen>({ type: 'home' });
   const [banner, setBanner] = useState<{ message: string; variant: 'info' | 'warning' | 'error' } | null>(null);
   const [showLogExercise, setShowLogExercise] = useState(false);
   const [exerciseName, setExerciseName] = useState('');
   const [exerciseSessionSets, setExerciseSessionSets] = useState<any[]>([]);
-  const [incompleteExerciseSession, setIncompleteExerciseSession] = useState<IncompleteExerciseSession | null>(() => loadIncompleteExerciseSession());
   const [exerciseRestTimerStart, setExerciseRestTimerStart] = useState<number | null>(null);
   const [showExerciseComplete, setShowExerciseComplete] = useState(false);
   const [showFinishConfirm, setShowFinishConfirm] = useState(false);
@@ -55,7 +84,6 @@ export default function App() {
   // Load preferences on mount
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [unitChangeKey, setUnitChangeKey] = useState(0); // Trigger re-renders when units change
-  const logExerciseSearchRef = useRef<ExerciseSearchHandle>(null);
   
   const handleUnitChange = () => {
     setUnitChangeKey(prev => prev + 1);
@@ -129,6 +157,11 @@ export default function App() {
   useEffect(() => {
     saveTemplates(templates);
   }, [templates]);
+
+  // Persist ad-hoc session to localStorage whenever it changes
+  useEffect(() => {
+    saveAdHocLoggingSession(adHocSession);
+  }, [adHocSession]);
 
   const unfinishedWorkout = getUnfinishedWorkout(workouts);
   const workoutHistory = getWorkoutHistory(workouts);
@@ -218,6 +251,8 @@ export default function App() {
       
       if (hasSets) {
         // Save: meaningful work exists (has sets)
+        const endedAt = Date.now();
+        const startedAt = incompleteExerciseSession.startedAt || incompleteExerciseSession.startTime || endedAt;
         const workout: Workout = {
           id: Date.now().toString(),
           name: incompleteExerciseSession.exerciseName,
@@ -228,7 +263,10 @@ export default function App() {
             isComplete: true,
           }],
           startTime: incompleteExerciseSession.startTime || Date.now(),
-          endTime: Date.now(),
+          endTime: endedAt,
+          startedAt,
+          endedAt,
+          durationSec: computeDurationSec(startedAt, endedAt),
           isComplete: true,
         };
         setWorkouts([...workouts, workout]);
@@ -260,13 +298,18 @@ export default function App() {
           // Save: meaningful work exists
           // Remove exercises with no sets, mark as complete
           const exercisesWithSets = workout.exercises.filter(ex => ex.sets.length > 0);
+          const endedAt = Date.now();
           setWorkouts(workouts.map(w => {
             if (w.id === workout.id) {
+              const startedAt = w.startedAt || w.startTime || endedAt;
               return {
                 ...w,
                 exercises: exercisesWithSets,
                 isComplete: true,
-                endTime: Date.now(),
+                endTime: endedAt,
+                startedAt,
+                endedAt,
+                durationSec: w.durationSec ?? computeDurationSec(startedAt, endedAt),
               };
             }
             return w;
@@ -363,6 +406,7 @@ export default function App() {
 
     // Use a more unique ID to avoid conflicts with workouts created by finalizeInProgressSession
     const workoutId = `${Date.now()}-${Math.random()}`;
+    const startedAt = Date.now();
     const newWorkout: Workout = {
       id: workoutId,
       name: template.name,
@@ -372,8 +416,10 @@ export default function App() {
         sets: [],
         isComplete: false,
       })),
-      startTime: Date.now(),
+      startTime: startedAt,
+      startedAt,
       isComplete: false,
+      templateId: templateId, // Store template reference for duration estimation
     };
     
     if (import.meta.env.DEV) {
@@ -393,11 +439,13 @@ export default function App() {
   };
 
   const handleQuickStartInternal = () => {
+    const startedAt = Date.now();
     const newWorkout: Workout = {
       id: Date.now().toString(),
       name: 'Quick Workout',
       exercises: [],
-      startTime: Date.now(),
+      startTime: startedAt,
+      startedAt,
       isComplete: false,
     };
     setWorkouts(prev => [...prev, newWorkout]);
@@ -408,11 +456,13 @@ export default function App() {
   };
 
   const createWorkoutInternal = (name: string) => {
+    const startedAt = Date.now();
     const newWorkout: Workout = {
       id: Date.now().toString(),
       name,
       exercises: [],
-      startTime: Date.now(),
+      startTime: startedAt,
+      startedAt,
       isComplete: false,
     };
     setWorkouts(prev => [...prev, newWorkout]);
@@ -422,9 +472,18 @@ export default function App() {
     setScreen({ type: 'workout-session', workoutId: newWorkout.id });
   };
 
-  const startExerciseSessionInternal = (name: string) => {
+  const startExerciseSessionInternal = (name: string, previousScreen?: AppScreen) => {
     setExerciseSessionSets([]);
-    setScreen({ type: 'exercise-session', exerciseName: name });
+    // Start timing immediately (persisted) so it survives refresh/backgrounding
+    const startedAt = Date.now();
+    setIncompleteExerciseSession({
+      exerciseName: name,
+      sets: [],
+      startTime: startedAt,
+      startedAt,
+      restTimerStart: null,
+    });
+    setScreen({ type: 'exercise-session', exerciseName: name, previousScreen });
     setShowLogExercise(false);
     setExerciseName('');
   };
@@ -458,15 +517,19 @@ export default function App() {
 
     // Edge case: If no exercises were performed, cannot repeat
     if (exercisesFromHistory.length === 0) {
-      console.warn('Cannot repeat workout with no logged exercises');
+      if (import.meta.env.DEV) {
+        console.warn('Cannot repeat workout with no logged exercises');
+      }
       return;
     }
 
+    const startedAt = Date.now();
     const newWorkout: Workout = {
       id: `${Date.now()}-${Math.random()}`, // Ensure unique ID
       name: workout.name,
       exercises: exercisesFromHistory,
-      startTime: Date.now(),
+      startTime: startedAt,
+      startedAt,
       isComplete: false, // Explicitly set as incomplete (never copy from history)
     };
 
@@ -502,9 +565,9 @@ export default function App() {
     );
   };
 
-  const startExerciseSession = (name: string) => {
+  const startExerciseSession = (name: string, previousScreen?: AppScreen) => {
     checkSessionConflict(
-      () => startExerciseSessionInternal(name),
+      () => startExerciseSessionInternal(name, previousScreen),
       'exercise',
       { exerciseName: name }
     );
@@ -533,7 +596,9 @@ export default function App() {
       addExerciseToDb(name);
     } catch (error) {
       // Exercise might already exist, that's fine - just proceed
-      console.log('[App] Exercise already exists or error adding:', error);
+      if (import.meta.env.DEV) {
+        console.log('[App] Exercise already exists or error adding:', error);
+      }
     }
     startExerciseSession(name);
     setBanner({ message: `Selected exercise: ${name}`, variant: 'info' });
@@ -545,15 +610,42 @@ export default function App() {
     setBanner({ message: `Exercise "${name}" added successfully`, variant: 'info' });
   };
 
-  const addExerciseToWorkout = (workoutId: string, exerciseName: string) => {
+  const addExerciseToWorkout = (workoutId: string, exerciseName: string, pairWithExerciseId?: string, swapWithExerciseId?: string, swapGroupId?: string) => {
     setWorkouts(workouts.map(w => {
       if (w.id === workoutId) {
+        const now = Date.now();
         const newExercise: Exercise = {
-          id: Date.now().toString(),
+          id: `${now}-${Math.random()}`,
           name: exerciseName,
           sets: [],
+          groupId: undefined, // Will be set below if pairing or swapping
         };
-        return { ...w, exercises: [...w.exercises, newExercise] };
+        
+        let updatedExercises = [...w.exercises, newExercise];
+        
+        // If swap requested, swap the new exercise with the target in the group
+        if (swapWithExerciseId && swapGroupId) {
+          updatedExercises = swapGroupMember(updatedExercises, swapGroupId, swapWithExerciseId, newExercise.id);
+        } else if (pairWithExerciseId) {
+          // If pairing requested, group the new exercise with the target
+          const targetExercise = w.exercises.find(ex => ex.id === pairWithExerciseId);
+          if (targetExercise) {
+            const targetGroupId = targetExercise.groupId || `${workoutId}-group-${now}-${Math.random()}`;
+            updatedExercises = updatedExercises.map(ex => {
+              if (ex.id === newExercise.id) {
+                return { ...ex, groupId: targetGroupId };
+              }
+              if (ex.id === pairWithExerciseId && !ex.groupId) {
+                return { ...ex, groupId: targetGroupId };
+              }
+              return ex;
+            });
+            // Ensure contiguity
+            updatedExercises = addToGroup(updatedExercises, targetGroupId, newExercise.id);
+          }
+        }
+        
+        return { ...w, exercises: updatedExercises };
       }
       return w;
     }));
@@ -567,6 +659,8 @@ export default function App() {
           ...w,
           exercises: w.exercises.map(ex => {
             if (ex.id === exerciseId) {
+              // If exercise was complete, reactivate it when a new set is added
+              const wasComplete = ex.isComplete;
               return {
                 ...ex,
                 sets: [...ex.sets, {
@@ -576,6 +670,8 @@ export default function App() {
                   timestamp: Date.now(),
                   restDuration,
                 }],
+                // Reactivate exercise if it was previously complete
+                isComplete: wasComplete ? false : ex.isComplete,
               };
             }
             return ex;
@@ -597,6 +693,83 @@ export default function App() {
                 ...ex,
                 sets: ex.sets.filter(s => s.id !== setId),
               };
+            }
+            return ex;
+          }),
+        };
+      }
+      return w;
+    }));
+  };
+
+  const updateSetFromExercise = (workoutId: string, exerciseId: string, setId: string, weight: number, reps: number) => {
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        return {
+          ...w,
+          exercises: w.exercises.map(ex => {
+            if (ex.id === exerciseId) {
+              return {
+                ...ex,
+                sets: ex.sets.map(s => {
+                  if (s.id === setId) {
+                    return {
+                      ...s,
+                      weight,
+                      reps,
+                    };
+                  }
+                  return s;
+                }),
+              };
+            }
+            return ex;
+          }),
+        };
+      }
+      return w;
+    }));
+  };
+
+  const addSupersetSetToWorkout = (workoutId: string, exercises: Array<{ exerciseId: string; weight: number; reps: number }>, supersetSetId: string) => {
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        return {
+          ...w,
+          exercises: w.exercises.map(ex => {
+            const exerciseData = exercises.find(e => e.exerciseId === ex.id);
+            if (exerciseData) {
+              // If exercise was complete, reactivate it when a new set is added
+              const wasComplete = ex.isComplete;
+              return {
+                ...ex,
+                sets: [...ex.sets, {
+                  id: Date.now().toString() + '-' + ex.id,
+                  weight: exerciseData.weight,
+                  reps: exerciseData.reps,
+                  timestamp: Date.now(),
+                  supersetSetId,
+                }],
+                // Reactivate exercise if it was previously complete
+                isComplete: wasComplete ? false : ex.isComplete,
+              };
+            }
+            return ex;
+          }),
+        };
+      }
+      return w;
+    }));
+  };
+
+  const completeGroupInWorkout = (workoutId: string, exerciseIds: string[]) => {
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        return {
+          ...w,
+          exercises: w.exercises.map(ex => {
+            if (exerciseIds.includes(ex.id)) {
+              return { ...ex, isComplete: true };
             }
             return ex;
           }),
@@ -663,6 +836,56 @@ export default function App() {
       return w;
     }));
   };
+  
+  const groupExercisesInWorkout = (workoutId: string, instanceIds: string[]) => {
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        const updatedExercises = createGroup(w.exercises, instanceIds);
+        return { ...w, exercises: updatedExercises };
+      }
+      return w;
+    }));
+  };
+  
+  const addToGroupInWorkout = (workoutId: string, groupId: string, instanceId: string) => {
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        const updatedExercises = addToGroup(w.exercises, groupId, instanceId);
+        return { ...w, exercises: updatedExercises };
+      }
+      return w;
+    }));
+  };
+  
+  const mergeGroupsInWorkout = (workoutId: string, groupId1: string, groupId2: string) => {
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        const updatedExercises = mergeGroups(w.exercises, groupId1, groupId2);
+        return { ...w, exercises: updatedExercises };
+      }
+      return w;
+    }));
+  };
+  
+  const ungroupExerciseInWorkout = (workoutId: string, instanceId: string) => {
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        const updatedExercises = ungroup(w.exercises, instanceId);
+        return { ...w, exercises: updatedExercises };
+      }
+      return w;
+    }));
+  };
+
+  const swapGroupMemberInWorkout = (workoutId: string, groupId: string, sourceMemberInstanceId: string, replacementInstanceId: string) => {
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        const updatedExercises = swapGroupMember(w.exercises, groupId, sourceMemberInstanceId, replacementInstanceId);
+        return { ...w, exercises: updatedExercises };
+      }
+      return w;
+    }));
+  };
 
   const swapExercise = (workoutId: string, exerciseId: string, newExerciseName: string) => {
     const workout = workouts.find(w => w.id === workoutId);
@@ -712,6 +935,19 @@ export default function App() {
     }));
   };
 
+  const updateWorkoutName = (workoutId: string, newName: string) => {
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        return {
+          ...w,
+          name: newName,
+          isUserNamed: true, // Mark as user-edited to prevent auto-naming override
+        };
+      }
+      return w;
+    }));
+  };
+
   const finishWorkout = (workoutId: string) => {
     const workout = workouts.find(w => w.id === workoutId);
     if (!workout) return;
@@ -738,7 +974,21 @@ export default function App() {
     // All exercises complete - proceed to summary
     setWorkouts(workouts.map(w => {
       if (w.id === workoutId) {
-        return { ...w, isComplete: true, endTime: Date.now() };
+        // Idempotent finalize timing
+        if (w.endedAt) {
+          return { ...w, isComplete: true, endTime: w.endTime || w.endedAt, startedAt: w.startedAt || w.startTime || w.endedAt };
+        }
+        const endedAt = Date.now();
+        const startedAt = w.startedAt || w.startTime || endedAt;
+        return {
+          ...w,
+          isComplete: true,
+          endTime: endedAt,
+          startedAt,
+          endedAt,
+          durationSec: w.durationSec ?? computeDurationSec(startedAt, endedAt),
+          templateId: w.templateId, // Preserve templateId
+        };
       }
       return w;
     }));
@@ -754,11 +1004,29 @@ export default function App() {
     
     setWorkouts(workouts.map(w => {
       if (w.id === workoutId) {
+        if (w.endedAt) {
         return { 
           ...w, 
           exercises: completedExercises,
           isComplete: true, 
-          endTime: Date.now() 
+            endTime: w.endTime || w.endedAt,
+            startedAt: w.startedAt || w.startTime || w.endedAt,
+            endedAt: w.endedAt,
+            durationSec: w.durationSec,
+            templateId: w.templateId, // Preserve templateId
+          };
+        }
+        const endedAt = Date.now();
+        const startedAt = w.startedAt || w.startTime || endedAt;
+        return { 
+          ...w, 
+          exercises: completedExercises,
+          isComplete: true, 
+          endTime: endedAt,
+          startedAt,
+          endedAt,
+          durationSec: w.durationSec ?? computeDurationSec(startedAt, endedAt),
+          templateId: w.templateId, // Preserve templateId
         };
       }
       return w;
@@ -791,6 +1059,9 @@ export default function App() {
     }
 
     // Create a workout with this single exercise
+    const now = Date.now();
+    const startedAt = incompleteExerciseSession?.startedAt || incompleteExerciseSession?.startTime || now;
+    const endedAt = now;
     const newWorkout: Workout = {
       id: Date.now().toString(),
       name: exerciseName,
@@ -799,8 +1070,11 @@ export default function App() {
         name: exerciseName,
         sets,
       }],
-      startTime: Date.now(),
-      endTime: Date.now(),
+      startTime: startedAt,
+      endTime: endedAt,
+      startedAt,
+      endedAt,
+      durationSec: computeDurationSec(startedAt, endedAt),
       isComplete: true,
     };
     setWorkouts([...workouts, newWorkout]);
@@ -835,6 +1109,9 @@ export default function App() {
   const confirmFinishExercise = () => {
     if (screen.type !== 'exercise-session') return;
     
+    const now = Date.now();
+    const startedAt = incompleteExerciseSession?.startedAt || incompleteExerciseSession?.startTime || now;
+    const endedAt = now;
     const newWorkout: Workout = {
       id: Date.now().toString(),
       name: screen.exerciseName,
@@ -844,8 +1121,11 @@ export default function App() {
         sets: exerciseSessionSets,
         isComplete: true,
       }],
-      startTime: Date.now(),
-      endTime: Date.now(),
+      startTime: startedAt,
+      endTime: endedAt,
+      startedAt,
+      endedAt,
+      durationSec: computeDurationSec(startedAt, endedAt),
       isComplete: true,
     };
     setWorkouts([...workouts, newWorkout]);
@@ -853,7 +1133,14 @@ export default function App() {
     setExerciseSessionSets([]);
     setIncompleteExerciseSession(null);
     // Mark as single exercise session so we don't double-save
-    setScreen({ type: 'workout-summary', workoutId: newWorkout.id, isJustCompleted: true, isSingleExercise: true });
+    // Preserve previousScreen if we came from start-logging
+    setScreen({ 
+      type: 'workout-summary', 
+      workoutId: newWorkout.id, 
+      isJustCompleted: true, 
+      isSingleExercise: true,
+      previousScreen: screen.previousScreen 
+    });
   };
 
   // Convert exercise session to workout
@@ -861,6 +1148,7 @@ export default function App() {
     if (screen.type !== 'exercise-session') return;
     
     const workoutName = generateWorkoutNumber();
+    const startedAt = incompleteExerciseSession?.startedAt || incompleteExerciseSession?.startTime || Date.now();
     const newWorkout: Workout = {
       id: Date.now().toString(),
       name: workoutName,
@@ -870,7 +1158,8 @@ export default function App() {
         sets: exerciseSessionSets,
         isComplete: true,
       }],
-      startTime: Date.now(),
+      startTime: startedAt,
+      startedAt,
       isComplete: false,
     };
     setWorkouts([...workouts, newWorkout]);
@@ -891,10 +1180,12 @@ export default function App() {
   const handleExerciseSessionBack = (restTimerStart: number | null) => {
     if (exerciseSessionSets.length > 0 && screen.type === 'exercise-session') {
       // Save as incomplete with timer state
+      const startedAt = incompleteExerciseSession?.startedAt || incompleteExerciseSession?.startTime || Date.now();
       setIncompleteExerciseSession({
         exerciseName: screen.exerciseName,
         sets: exerciseSessionSets,
-        startTime: Date.now(),
+        startTime: startedAt,
+        startedAt,
         restTimerStart: restTimerStart,
       });
     } else {
@@ -903,7 +1194,13 @@ export default function App() {
     }
     setExerciseSessionSets([]);
     setExerciseRestTimerStart(null);
+    
+    // Return to previous screen if available (e.g., start-logging), otherwise home
+    if (screen.type === 'exercise-session' && screen.previousScreen) {
+      setScreen(screen.previousScreen);
+    } else {
     setScreen({ type: 'home' });
+    }
   };
 
   // Resume incomplete exercise session
@@ -927,6 +1224,36 @@ export default function App() {
     setScreen({ type: 'history', searchQuery, scrollPosition });
   }, []);
 
+  // Show recovery screen if storage load failed
+  if (storageError) {
+    return (
+      <DataRecoveryScreen
+        error={storageError.error}
+        rawData={storageError.rawData}
+        onRecoveryComplete={() => {
+          // Reload state after recovery
+          const result = loadState();
+          if (result.success && result.state) {
+            setWorkouts(result.state.workouts || []);
+            setTemplates(result.state.templates || []);
+            setIncompleteExerciseSession(result.state.incompleteExerciseSession ?? null);
+            setAdHocSession(result.state.adHocSession ?? null);
+            setStorageError(null);
+          }
+        }}
+        onReset={() => {
+          // Reset to empty state
+          setWorkouts([]);
+          setTemplates([]);
+          setIncompleteExerciseSession(null);
+          setAdHocSession(null);
+          setStorageError(null);
+          setScreen({ type: 'home' });
+        }}
+      />
+    );
+  }
+
   return (
     <div className="size-full flex flex-col bg-background">
       {/* Main content area with bottom padding for fixed nav (only when nav is visible) */}
@@ -944,6 +1271,7 @@ export default function App() {
           <HomeScreen
             unfinishedWorkout={unfinishedWorkout}
             incompleteExerciseSession={incompleteExerciseSession}
+            adHocSession={adHocSession}
             workoutTemplates={templates}
             theme={theme}
             onThemeChange={(newTheme) => {
@@ -956,7 +1284,15 @@ export default function App() {
             onViewTemplate={(templateId) => setScreen({ type: 'view-template', templateId })}
             onStartTemplate={handleStartTemplate}
             onQuickStart={handleQuickStart}
-            onLogExercise={() => setShowLogExercise(true)}
+            onLogExercise={() => setScreen({ type: 'start-logging' })}
+            onResumeAdHocSession={() => {
+              if (adHocSession) {
+                setScreen({ type: 'ad-hoc-session', sessionId: adHocSession.id });
+              }
+            }}
+            onDiscardAdHocSession={() => {
+              setAdHocSession(null);
+            }}
             onResumeWorkout={() => {
               if (unfinishedWorkout) {
                 // Double-check the workout exists in the workouts array before navigating
@@ -1055,16 +1391,21 @@ export default function App() {
             }
           });
           
+          // Get completed workouts for duration estimation
+          const completedWorkouts = workouts.filter(w => w.isComplete && w.durationSec !== undefined);
+          
           return (
             <ViewTemplateScreen
               template={template}
               lastSessionData={lastSessionData}
+              completedWorkouts={completedWorkouts}
               onBack={() => setScreen({ type: 'home' })}
               onStart={(editedExerciseNames) => {
                 // Create workout with edited exercises (editedExerciseNames is always provided)
                 checkSessionConflict(
                   () => {
                     const workoutId = `${Date.now()}-${Math.random()}`;
+                    const startedAt = Date.now();
                     const newWorkout: Workout = {
                       id: workoutId,
                       name: template.name,
@@ -1074,8 +1415,10 @@ export default function App() {
                         sets: [],
                         isComplete: false,
                       })),
-                      startTime: Date.now(),
+                      startTime: startedAt,
+                      startedAt,
                       isComplete: false,
+                      templateId: template.id, // Store template reference for duration estimation
                     };
                     setWorkouts(prev => [...prev, newWorkout]);
                     saveIncompleteWorkoutId(newWorkout.id);
@@ -1187,16 +1530,36 @@ export default function App() {
               exercises={workout.exercises}
               lastSessionData={lastSessionData}
               allWorkouts={workouts}
+              startedAt={workout.startedAt || workout.startTime}
+              endedAt={workout.endedAt || workout.endTime}
+              onEnsureStartedAt={() => {
+                // Idempotent: only set if missing
+                if (workout.startedAt) return;
+                const startedAt = workout.startTime || Date.now();
+                setWorkouts(prev =>
+                  prev.map(w => (w.id === workout.id ? { ...w, startedAt } : w))
+                );
+              }}
               onBack={() => setScreen({ type: 'home' })}
-              onAddExercise={(name) => addExerciseToWorkout(workout.id, name)}
+              onAddExercise={(name, pairWithExerciseId, swapWithExerciseId, swapGroupId) => {
+                addExerciseToWorkout(workout.id, name, pairWithExerciseId, swapWithExerciseId, swapGroupId);
+              }}
               onAddSet={(exerciseId, weight, reps) => addSetToExercise(workout.id, exerciseId, weight, reps)}
+              onAddSupersetSet={(exercises, supersetSetId) => addSupersetSetToWorkout(workout.id, exercises, supersetSetId)}
               onDeleteSet={(exerciseId, setId) => deleteSetFromExercise(workout.id, exerciseId, setId)}
+              onUpdateSet={(exerciseId, setId, weight, reps) => updateSetFromExercise(workout.id, exerciseId, setId, weight, reps)}
               onCompleteExercise={(exerciseId) => completeExercise(workout.id, exerciseId)}
+              onCompleteGroup={(exerciseIds) => completeGroupInWorkout(workout.id, exerciseIds)}
               onSkipExercise={(exerciseId) => skipExercise(workout.id, exerciseId)}
               onDeferExercise={(exerciseId) => deferExercise(workout.id, exerciseId)}
               onSwapExercise={(exerciseId, newExerciseName) => swapExercise(workout.id, exerciseId, newExerciseName)}
               onReorderExercises={(newExercises) => reorderExercises(workout.id, newExercises)}
               onFinishWorkout={() => finishWorkout(workout.id)}
+              onGroupExercises={(instanceIds) => groupExercisesInWorkout(workout.id, instanceIds)}
+              onAddToGroup={(groupId, instanceId) => addToGroupInWorkout(workout.id, groupId, instanceId)}
+              onMergeGroups={(groupId1, groupId2) => mergeGroupsInWorkout(workout.id, groupId1, groupId2)}
+              onUngroup={(instanceId) => ungroupExerciseInWorkout(workout.id, instanceId)}
+              onSwapGroupMember={(groupId, sourceMemberInstanceId, replacementInstanceId) => swapGroupMemberInWorkout(workout.id, groupId, sourceMemberInstanceId, replacementInstanceId)}
             />
           );
         })()}
@@ -1209,6 +1572,24 @@ export default function App() {
               exerciseName={screen.exerciseName}
               sets={exerciseSessionSets}
               lastSession={lastSession}
+              startedAt={incompleteExerciseSession?.startedAt || incompleteExerciseSession?.startTime}
+              endedAt={incompleteExerciseSession?.endedAt || incompleteExerciseSession?.endTime}
+              onEnsureStartedAt={() => {
+                if (incompleteExerciseSession?.startedAt) return;
+                const startedAt = incompleteExerciseSession?.startTime || Date.now();
+                setIncompleteExerciseSession(prev => {
+                  if (!prev) {
+                    return {
+                      exerciseName: screen.exerciseName,
+                      sets: exerciseSessionSets,
+                      startTime: startedAt,
+                      startedAt,
+                      restTimerStart: incompleteExerciseSession?.restTimerStart || null,
+                    };
+                  }
+                  return { ...prev, startTime: prev.startTime || startedAt, startedAt };
+                });
+              }}
               initialRestTimerStart={incompleteExerciseSession?.restTimerStart || null}
               onBack={(restTimerStart) => handleExerciseSessionBack(restTimerStart)}
               onAddSet={(weight, reps, restDuration) => {
@@ -1232,32 +1613,109 @@ export default function App() {
         {screen.type === 'workout-summary' && (() => {
           const workout = workouts.find(w => w.id === screen.workoutId);
           if (!workout) return null;
+          const isFromHistory = screen.previousScreen?.type === 'history';
+          const isJustCompletedMulti =
+            !!screen.isJustCompleted && !screen.isSingleExercise && workout.exercises.length >= 2;
           return (
             <WorkoutSummaryScreen
               workout={workout}
               isJustCompleted={screen.isJustCompleted}
               isSingleExercise={screen.isSingleExercise}
-              onBack={async () => {
-                // If just completed and not a single exercise, try to save to backend
-                // Single exercises are already saved in confirmFinishExercise, so skip saving here
-                // Note: Workout is already saved locally, so backend save is optional
-                if (screen.isJustCompleted && !screen.isSingleExercise) {
+              isFromHistory={isFromHistory}
+              onUpdateName={updateWorkoutName}
+              onSaveWorkout={(workoutId, name) => {
+                const workoutToSave = workouts.find(w => w.id === workoutId);
+                if (!workoutToSave) return;
+                
+                // Convert workout to template
+                const newTemplate: WorkoutTemplate = {
+                  id: Date.now().toString(),
+                  name: name,
+                  exerciseNames: workoutToSave.exercises.map(ex => ex.name),
+                  createdAt: Date.now(),
+                  updatedAt: Date.now(),
+                };
+                
+                setTemplates([...templates, newTemplate]);
+                saveTemplate(newTemplate);
+                setBanner({ message: 'Workout saved', variant: 'info' });
+              }}
+              onDelete={
+                isFromHistory || isJustCompletedMulti
+                  ? () => {
+                      deleteWorkouts([workout.id]);
+                      setBanner({ message: 'Workout deleted', variant: 'info' });
+
+                      // After deleting a just-finished workout, always go Home.
+                      // After deleting from history, return to history list (existing behavior below uses previousScreen).
+                      if (isFromHistory && screen.previousScreen?.type === 'history') {
+                        setScreen({ ...screen.previousScreen, restoreKey: Date.now() });
+                      } else {
+                        setScreen({ type: 'home' });
+                      }
+                    }
+                  : undefined
+              }
+              onFinalize={async () => {
+                // Finalize the workout: check if it should be saved or discarded
+                const totalSets = workout.exercises.reduce((sum, ex) => sum + ex.sets.length, 0);
+                
+                if (totalSets === 0 || workout.exercises.length === 0) {
+                  // Discard workout with no sets or exercises
+                  deleteWorkouts([workout.id]);
+                  setBanner({ message: 'Workout discarded', variant: 'info' });
+                } else {
+                  // Workout already saved to workouts array, just try backend save
                   try {
-                    console.log('Saving workout:', workout);
+                    if (import.meta.env.DEV) {
+                      console.log('Saving workout:', workout);
+                    }
                     await saveWorkout(workout);
-                    setBanner({ message: 'Workout logged', variant: 'info' });
+                    setBanner({ message: 'Workout saved', variant: 'info' });
                   } catch (error) {
                     // Silently fail - workout is already saved locally
-                    // Only log to console for debugging
-                    console.warn('Backend save failed (workout saved locally):', error);
+                    if (import.meta.env.DEV) {
+                      console.warn('Backend save failed (workout saved locally):', error);
+                    }
+                    setBanner({ message: 'Workout saved', variant: 'info' });
                   }
                 }
                 
-                // If just completed, return to home screen
-                // Otherwise, return to previous screen (e.g., history page) if available
+                // Clear any active sessions
+                setAdHocSession(null);
+                
+                // Navigate to Home
+                setScreen({ type: 'home' });
+              }}
+              onBack={async () => {
+                // If just completed, use finalize instead
                 if (screen.isJustCompleted) {
+                  // This should not be called when Done is tapped (onFinalize handles that)
+                  // But if back button is used, still finalize
+                  const totalSets = workout.exercises.reduce((sum, ex) => sum + ex.sets.length, 0);
+                  
+                  if (totalSets === 0 || workout.exercises.length === 0) {
+                    deleteWorkouts([workout.id]);
+                    setBanner({ message: 'Workout discarded', variant: 'info' });
+                  } else {
+                    try {
+                      await saveWorkout(workout);
+                      setBanner({ message: 'Workout saved', variant: 'info' });
+                    } catch (error) {
+                      if (import.meta.env.DEV) {
+                        console.warn('Backend save failed (workout saved locally):', error);
+                      }
+                      setBanner({ message: 'Workout saved', variant: 'info' });
+                    }
+                  }
+                  
+                  setAdHocSession(null);
                   setScreen({ type: 'home' });
-                } else if (screen.previousScreen) {
+                  return;
+                }
+                
+                // Not just completed - return to previous screen
+                if (screen.previousScreen) {
                   // Add restoreKey for history screen to force re-render and scroll restoration
                   if (screen.previousScreen.type === 'history') {
                     setScreen({ 
@@ -1281,9 +1739,10 @@ export default function App() {
                 }
               }}
               onDelete={() => {
-                // Delete the workout entry
+                // Delete workout from history
                 deleteWorkouts([workout.id]);
-                // Navigate back to history if we came from there, otherwise home
+                setBanner({ message: 'Workout deleted', variant: 'info' });
+                // Navigate back to history
                 if (screen.previousScreen && screen.previousScreen.type === 'history') {
                   setScreen({ 
                     ...screen.previousScreen, 
@@ -1356,6 +1815,16 @@ export default function App() {
               setAppearance(newTheme);
             }}
             onUnitChange={handleUnitChange}
+            onDataImported={() => {
+              // Reload state after import
+              const result = loadState();
+              if (result.success && result.state) {
+                setWorkouts(result.state.workouts || []);
+                setTemplates(result.state.templates || []);
+                setIncompleteExerciseSession(result.state.incompleteExerciseSession ?? null);
+                setAdHocSession(result.state.adHocSession ?? null);
+              }
+            }}
             onBack={() => {
               if (screen.previousScreen) {
                 setScreen(screen.previousScreen);
@@ -1399,8 +1868,428 @@ export default function App() {
             onStartExercise={startExerciseSession}
             onDeleteWorkouts={deleteWorkouts}
             onStateChange={handleHistoryStateChange}
+            onUpdateWorkoutName={updateWorkoutName}
           />
         )}
+
+        {screen.type === 'start-logging' && (
+          <StartLoggingScreen
+            session={adHocSession}
+            onBack={() => setScreen({ type: 'home' })}
+            onAddExercise={(exerciseName) => {
+              // Exercise is already added to session in StartLoggingScreen
+              // This callback can be used for analytics or other side effects
+            }}
+            onRemoveExercise={(exerciseInstanceId) => {
+              // Exercise is already removed from session in StartLoggingScreen
+              // This callback can be used for analytics or other side effects
+            }}
+            onEnterSession={() => {
+              if (adHocSession) {
+                // Ensure startedAt is set/persisted before entering the session screen
+                if (!adHocSession.startedAt) {
+                  const startedAt = adHocSession.startTime || Date.now();
+                  setAdHocSession({ ...adHocSession, startedAt, startTime: adHocSession.startTime || startedAt });
+                }
+                setScreen({ type: 'ad-hoc-session', sessionId: adHocSession.id });
+              }
+            }}
+            onUpdateSession={(session) => setAdHocSession(session)}
+          />
+        )}
+
+        {screen.type === 'ad-hoc-session' && (() => {
+          const session = adHocSession;
+          if (!session || session.id !== screen.sessionId) {
+            // Session not found, go back to start-logging
+            setScreen({ type: 'start-logging' });
+            return null;
+          }
+
+          // Convert session exercises to Workout format for WorkoutSessionScreen
+          const exercises: Exercise[] = session.exerciseOrder
+            .map(id => session.exercises.find(ex => ex.id === id))
+            .filter((ex): ex is NonNullable<typeof ex> => ex !== undefined)
+            .map(ex => ({
+              id: ex.id,
+              name: ex.name,
+              sets: ex.sets,
+              isComplete: ex.isComplete || false,
+              groupId: ex.groupId || null,
+            }));
+
+          // Build last session data map
+          const lastSessionData = new Map<string, { sets: Array<{ weight: number; reps: number }>; date: number }>();
+          exercises.forEach(exercise => {
+            const lastSession = getLastSessionForExercise(exercise.name, workouts);
+            if (lastSession) {
+              lastSessionData.set(exercise.name, lastSession);
+            }
+          });
+
+          return (
+            <WorkoutSessionScreen
+              workoutName="Logging Session"
+              exercises={exercises}
+              lastSessionData={lastSessionData}
+              allWorkouts={workouts}
+              startedAt={session.startedAt || session.startTime}
+              endedAt={session.endedAt || session.endTime}
+              onEnsureStartedAt={() => {
+                if (!adHocSession || adHocSession.id !== session.id) return;
+                if (adHocSession.startedAt) return;
+                const startedAt = adHocSession.startTime || Date.now();
+                const updated: AdHocLoggingSession = { ...adHocSession, startedAt, startTime: adHocSession.startTime || startedAt };
+                setAdHocSession(updated);
+              }}
+              onBack={() => setScreen({ type: 'start-logging' })}
+              onAddExercise={(name: string, pairWithExerciseId?: string, swapWithExerciseId?: string, swapGroupId?: string) => {
+                // Add exercise to session
+                const exercise = getAllExercisesList().find(
+                  ex => ex.name === name
+                );
+                if (!exercise) return;
+
+                const now = Date.now();
+                const exerciseInstanceId = `${session.id}-ex-${now}-${Math.random()}`;
+                let updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exerciseOrder: [...session.exerciseOrder, exerciseInstanceId],
+                  exercises: [
+                    ...session.exercises,
+                    {
+                      id: exerciseInstanceId,
+                      exerciseId: exercise.id,
+                      name: exercise.name,
+                      source: exercise.source,
+                      addedAt: now,
+                      sets: [],
+                      isComplete: false,
+                    },
+                  ],
+                };
+                
+                // If swap requested, swap the new exercise with the target in the group
+                if (swapWithExerciseId && swapGroupId) {
+                  const exercisesArray = updatedSession.exercises.map(ex => ({
+                    id: ex.id,
+                    name: ex.name,
+                    sets: ex.sets,
+                    isComplete: ex.isComplete || false,
+                    groupId: ex.groupId || null,
+                  }));
+                  const swappedExercises = swapGroupMember(exercisesArray, swapGroupId, swapWithExerciseId, exerciseInstanceId);
+                  // Map back to session format
+                  const exerciseMap = new Map(updatedSession.exercises.map(ex => [ex.id, ex]));
+                  updatedSession.exercises = swappedExercises.map(ex => {
+                    const original = exerciseMap.get(ex.id);
+                    if (original) {
+                      return {
+                        ...original,
+                        groupId: ex.groupId,
+                      };
+                    }
+                    // New exercise
+                    return {
+                      id: ex.id,
+                      exerciseId: exercise.id,
+                      name: ex.name,
+                      source: exercise.source,
+                      addedAt: now,
+                      sets: ex.sets,
+                      isComplete: ex.isComplete,
+                      groupId: ex.groupId,
+                    };
+                  });
+                  updatedSession = applyGroupingToSession(updatedSession, swappedExercises);
+                } else if (pairWithExerciseId) {
+                  // If pairing requested, group the new exercise with the target
+                  const targetExercise = updatedSession.exercises.find(ex => ex.id === pairWithExerciseId);
+                  if (targetExercise) {
+                    const targetGroupId = targetExercise.groupId || `${session.id}-group-${now}-${Math.random()}`;
+                    // Update exercises with groupId
+                    const exercisesWithGrouping = updatedSession.exercises.map(ex => {
+                      if (ex.id === exerciseInstanceId) {
+                        return { ...ex, groupId: targetGroupId };
+                      }
+                      if (ex.id === pairWithExerciseId && !ex.groupId) {
+                        return { ...ex, groupId: targetGroupId };
+                      }
+                      return ex;
+                    });
+                    // Ensure contiguity - pass the exercises array, not the groupId
+                    updatedSession = applyGroupingToSession(updatedSession, exercisesWithGrouping);
+                  }
+                } else {
+                  // Update classification and name when exercises change
+                  const exerciseCount = updatedSession.exercises.length;
+                  const reclassifiedSession = updateSessionClassificationAndName(updatedSession, exerciseCount);
+                  setAdHocSession(reclassifiedSession);
+                  return;
+                }
+                
+                // Update classification and name when exercises change
+                const exerciseCount = updatedSession.exercises.length;
+                const reclassifiedSession = updateSessionClassificationAndName(updatedSession, exerciseCount);
+                setAdHocSession(reclassifiedSession);
+              }}
+              onAddSet={(exerciseId, weight, reps, restDuration) => {
+                const updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exercises: session.exercises.map(ex => {
+                    if (ex.id === exerciseId) {
+                      // If exercise was complete, reactivate it when a new set is added
+                      const wasComplete = ex.isComplete;
+                      return {
+                        ...ex,
+                        sets: [...ex.sets, {
+                          id: Date.now().toString(),
+                          weight,
+                          reps,
+                          timestamp: Date.now(),
+                          restDuration,
+                        }],
+                        // Reactivate exercise if it was previously complete
+                        isComplete: wasComplete ? false : ex.isComplete,
+                      };
+                    }
+                    return ex;
+                  }),
+                };
+                setAdHocSession(updatedSession);
+              }}
+              onAddSupersetSet={(exercises, supersetSetId) => {
+                const updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exercises: session.exercises.map(ex => {
+                    const exerciseData = exercises.find(e => e.exerciseId === ex.id);
+                    if (exerciseData) {
+                      // If exercise was complete, reactivate it when a new set is added
+                      const wasComplete = ex.isComplete;
+                      return {
+                        ...ex,
+                        sets: [...ex.sets, {
+                          id: Date.now().toString() + '-' + ex.id,
+                          weight: exerciseData.weight,
+                          reps: exerciseData.reps,
+                          timestamp: Date.now(),
+                          supersetSetId,
+                        }],
+                        // Reactivate exercise if it was previously complete
+                        isComplete: wasComplete ? false : ex.isComplete,
+                      };
+                    }
+                    return ex;
+                  }),
+                };
+                setAdHocSession(updatedSession);
+              }}
+              onDeleteSet={(exerciseId, setId) => {
+                const updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exercises: session.exercises.map(ex => {
+                    if (ex.id === exerciseId) {
+                      return {
+                        ...ex,
+                        sets: ex.sets.filter(s => s.id !== setId),
+                      };
+                    }
+                    return ex;
+                  }),
+                };
+                setAdHocSession(updatedSession);
+              }}
+              onUpdateSet={(exerciseId, setId, weight, reps) => {
+                const updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exercises: session.exercises.map(ex => {
+                    if (ex.id === exerciseId) {
+                      return {
+                        ...ex,
+                        sets: ex.sets.map(s => {
+                          if (s.id === setId) {
+                            return {
+                              ...s,
+                              weight,
+                              reps,
+                            };
+                          }
+                          return s;
+                        }),
+                      };
+                    }
+                    return ex;
+                  }),
+                };
+                setAdHocSession(updatedSession);
+              }}
+              onCompleteExercise={(exerciseId) => {
+                const updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exercises: session.exercises.map(ex => {
+                    if (ex.id === exerciseId) {
+                      return { ...ex, isComplete: true };
+                    }
+                    return ex;
+                  }),
+                };
+                setAdHocSession(updatedSession);
+              }}
+              onCompleteGroup={(exerciseIds) => {
+                const updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exercises: session.exercises.map(ex => {
+                    if (exerciseIds.includes(ex.id)) {
+                      return { ...ex, isComplete: true };
+                    }
+                    return ex;
+                  }),
+                };
+                setAdHocSession(updatedSession);
+              }}
+              onSkipExercise={(exerciseId) => {
+                // Skip exercise - mark as complete
+                const updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exercises: session.exercises.map(ex => {
+                    if (ex.id === exerciseId) {
+                      return { ...ex, isComplete: true };
+                    }
+                    return ex;
+                  }),
+                };
+                setAdHocSession(updatedSession);
+              }}
+              onDeferExercise={(exerciseId) => {
+                // Move to end
+                const exercise = session.exercises.find(ex => ex.id === exerciseId);
+                if (!exercise) return;
+
+                const updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exerciseOrder: [
+                    ...session.exerciseOrder.filter(id => id !== exerciseId),
+                    exerciseId,
+                  ],
+                };
+                setAdHocSession(updatedSession);
+              }}
+              onSwapExercise={(exerciseId, newExerciseName) => {
+                // Find replacement exercise
+                const replacement = getAllExercisesList().find(ex => ex.name === newExerciseName);
+                if (!replacement) return;
+
+                const updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exercises: session.exercises.map(ex => {
+                    if (ex.id === exerciseId) {
+                      return {
+                        ...ex,
+                        exerciseId: replacement.id,
+                        name: replacement.name,
+                        source: replacement.source,
+                        sets: [], // Start fresh
+                        isComplete: false,
+                      };
+                    }
+                    return ex;
+                  }),
+                };
+                setAdHocSession(updatedSession);
+              }}
+              onReorderExercises={(newExercises) => {
+                // Preserve groupId when reordering
+                const exerciseMap = new Map(session.exercises.map(ex => [ex.id, ex]));
+                const reorderedExercises = newExercises.map(ex => {
+                  const sessionEx = exerciseMap.get(ex.id);
+                  return {
+                    ...sessionEx!,
+                    groupId: ex.groupId || sessionEx?.groupId || null,
+                  };
+                });
+                
+                const updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exerciseOrder: newExercises.map(ex => ex.id),
+                  exercises: reorderedExercises,
+                };
+                setAdHocSession(updatedSession);
+              }}
+              onGroupExercises={(instanceIds) => {
+                const updatedExercises = createGroup(exercises, instanceIds);
+                const updatedSession = applyGroupingToSession(session, updatedExercises);
+                setAdHocSession(updatedSession);
+              }}
+              onAddToGroup={(groupId, instanceId) => {
+                const updatedExercises = addToGroup(exercises, groupId, instanceId);
+                const updatedSession = applyGroupingToSession(session, updatedExercises);
+                setAdHocSession(updatedSession);
+              }}
+              onMergeGroups={(groupId1, groupId2) => {
+                const updatedExercises = mergeGroups(exercises, groupId1, groupId2);
+                const updatedSession = applyGroupingToSession(session, updatedExercises);
+                setAdHocSession(updatedSession);
+              }}
+              onUngroup={(instanceId) => {
+                const updatedExercises = ungroup(exercises, instanceId);
+                const updatedSession = applyGroupingToSession(session, updatedExercises);
+                setAdHocSession(updatedSession);
+              }}
+              onSwapGroupMember={(groupId, sourceMemberInstanceId, replacementInstanceId) => {
+                const updatedExercises = swapGroupMember(exercises, groupId, sourceMemberInstanceId, replacementInstanceId);
+                const updatedSession = applyGroupingToSession(session, updatedExercises);
+                setAdHocSession(updatedSession);
+              }}
+              onFinishWorkout={() => {
+                // Classify and name the session
+                const exerciseCount = exercises.length;
+                const updatedSession = updateSessionClassificationAndName(session, exerciseCount);
+                
+                const endedAt = Date.now();
+                const startedAt = updatedSession.startedAt || updatedSession.startTime || endedAt;
+
+                // Convert session to workout and save
+                const workout: Workout = {
+                  id: Date.now().toString(),
+                  name: updatedSession.name || generateDefaultSessionName(updatedSession, exerciseCount),
+                  exercises: exercises,
+                  startTime: startedAt,
+                  endTime: endedAt,
+                  startedAt,
+                  endedAt,
+                  durationSec: computeDurationSec(startedAt, endedAt),
+                  isComplete: true,
+                  isUserNamed: updatedSession.isUserNamed,
+                  sessionType: updatedSession.sessionType,
+                };
+                setWorkouts([...workouts, workout]);
+                
+                // Mark session as completed
+                const completedSession: AdHocLoggingSession = {
+                  ...updatedSession,
+                  status: 'completed',
+                  startTime: startedAt,
+                  startedAt,
+                  endTime: endedAt,
+                  endedAt,
+                  durationSec: updatedSession.durationSec ?? computeDurationSec(startedAt, endedAt),
+                };
+                setAdHocSession(null); // Clear active session
+                saveAdHocLoggingSession(completedSession);
+                
+                // Navigate to summary
+                const isSingleExercise = exerciseCount === 1;
+                setScreen({ 
+                  type: 'workout-summary', 
+                  workoutId: workout.id, 
+                  isJustCompleted: true,
+                  isSingleExercise,
+                  previousScreen: { type: 'home' }
+                });
+              }}
+            />
+          );
+        })()}
       </div>
 
       {/* Bottom nav bar - hide during workout and exercise flows */}
@@ -1410,7 +2299,9 @@ export default function App() {
         screen.type === 'workout-session' ||
         screen.type === 'workout-summary' ||
         screen.type === 'exercise-session' ||
-        screen.type === 'settings'
+        screen.type === 'settings' ||
+        screen.type === 'start-logging' ||
+        screen.type === 'ad-hoc-session'
       ) && (
         <nav className="fixed bottom-0 left-0 right-0 pb-6 pt-4 px-4 z-50">
           <div className="max-w-md mx-auto">
@@ -1458,10 +2349,8 @@ export default function App() {
           setExerciseName('');
         }}
         title="Log Exercise"
-        onScrollStart={() => logExerciseSearchRef.current?.blur()}
       >
         <LogExerciseSearch
-          ref={logExerciseSearchRef}
           onSelectExercise={handleLogExerciseFromModal}
           onAddNewExercise={handleAddNewExerciseFromModal}
         />

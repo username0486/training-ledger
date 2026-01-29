@@ -1,3 +1,22 @@
 @import './fonts.css';
 @import './tailwind.css';
 @import './theme.css';
+
+/* Disable iOS shake-to-undo UI */
+/* Hide any undo/redo UI that might appear from system prompts */
+input::-webkit-undo,
+input::-webkit-redo,
+textarea::-webkit-undo,
+textarea::-webkit-redo {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+}
+
+/* Prevent undo/redo UI from appearing */
+input,
+textarea {
+  -webkit-user-select: text;
+  /* Disable undo manager visual feedback */
+  -webkit-tap-highlight-color: transparent;
+}

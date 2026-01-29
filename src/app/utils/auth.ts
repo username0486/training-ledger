@@ -146,7 +146,9 @@ export async function getAccessToken(): Promise<string | null> {
     const now = Math.floor(Date.now() / 1000);
     
     if (expiresAt && (expiresAt - now < 60)) {
-      console.log('Token expired or about to expire, refreshing session...');
+      if (import.meta.env.DEV) {
+        console.log('Token expired or about to expire, refreshing session...');
+      }
       
       // Try to refresh the session
       const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession(data.session);

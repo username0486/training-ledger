@@ -2,15 +2,19 @@ import { useState, useEffect } from 'react';
 import { Check, Clock, X } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Button } from '../components/Button';
-import { Input } from '../components/Input';
 import { Set } from '../types';
-import { formatRelativeTime } from '../utils/storage';
-import { formatWeight } from '../../utils/weightFormat';
+import { formatWeight, convertKgToDisplay, convertDisplayToKg } from '../../utils/weightFormat';
+import { RepsWeightGrid } from '../components/RepsWeightGrid';
+import { LastSessionStats } from '../components/LastSessionStats';
+import { formatDuration, getElapsedSec } from '../utils/duration';
 
 interface ExerciseSessionScreenProps {
   exerciseName: string;
   sets: Set[];
   lastSession?: { sets: Array<{ weight: number; reps: number }>; date: number } | null;
+  startedAt?: number;
+  endedAt?: number;
+  onEnsureStartedAt?: () => void; // ensures startedAt is set + persisted (idempotent)
   initialRestTimerStart?: number | null;
   onBack: (restTimerStart: number | null) => void;
   onAddSet: (weight: number, reps: number, restDuration?: number) => void;
@@ -23,6 +27,9 @@ export function ExerciseSessionScreen({
   exerciseName,
   sets,
   lastSession,
+  startedAt,
+  endedAt,
+  onEnsureStartedAt,
   initialRestTimerStart,
   onBack,
   onAddSet,
@@ -34,6 +41,24 @@ export function ExerciseSessionScreen({
   const [reps, setReps] = useState('');
   const [restTimerStart, setRestTimerStart] = useState<number | null>(initialRestTimerStart || null);
   const [restTimerElapsed, setRestTimerElapsed] = useState(0);
+
+  // Ensure session startedAt is persisted as soon as this screen is active (idempotent)
+  useEffect(() => {
+    onEnsureStartedAt?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // LIVE header timer (timestamp-based; interval only forces re-render)
+  const [timerNow, setTimerNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!startedAt) return;
+    if (endedAt) return;
+    const id = window.setInterval(() => setTimerNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [startedAt, endedAt]);
+
+  const elapsedSec = startedAt ? getElapsedSec(startedAt, endedAt) : 0;
+  const elapsedLabel = formatDuration(elapsedSec);
 
   // Rest timer effect
   useEffect(() => {
@@ -55,10 +80,12 @@ export function ExerciseSessionScreen({
   }, [restTimerStart, onRestTimerChange]);
 
   // Prefill inputs with last set's values ONLY after a set is added (not on initial load)
+  // Weight is stored in kg (canonical), convert to display unit for input
   useEffect(() => {
     if (sets.length > 0) {
       const lastSet = sets[sets.length - 1];
-      setWeight(lastSet.weight.toString());
+      const displayWeight = convertKgToDisplay(lastSet.weight);
+      setWeight(displayWeight.toString());
       setReps(lastSet.reps.toString());
     } else {
       // Clear fields on initial load (no sets yet)
@@ -68,16 +95,20 @@ export function ExerciseSessionScreen({
   }, [sets.length]);
 
   const handleAddSet = () => {
-    const w = parseFloat(weight);
+    const wDisplay = parseFloat(weight);
     const r = parseInt(reps);
-    if (!isNaN(w) && w >= 0 && r > 0) {
-      onAddSet(w, r, restTimerElapsed);
-      // Prefill with the set we just added (for next set)
-      setWeight(w.toString());
-      setReps(r.toString());
-      // Start rest timer
-      setRestTimerStart(Date.now());
-    }
+    // Allow 0 as valid input (for bodyweight exercises, planks, etc.)
+    if (weight === '' || reps === '' || isNaN(wDisplay) || isNaN(r) || wDisplay < 0 || r < 0) return;
+    
+    // Convert from display unit to kg (canonical) for storage
+    const wKg = convertDisplayToKg(wDisplay);
+    
+    onAddSet(wKg, r, restTimerElapsed);
+    // Prefill with the set we just added (for next set) - keep in display unit
+    setWeight(wDisplay.toString());
+    setReps(r.toString());
+    // Start rest timer
+    setRestTimerStart(Date.now());
   };
 
   return (
@@ -85,6 +116,13 @@ export function ExerciseSessionScreen({
       <TopBar
         title={exerciseName}
         onBack={() => onBack(restTimerStart)}
+        rightAction={
+          startedAt ? (
+            <div className="text-sm tabular-nums text-text-muted">
+              {elapsedLabel}
+            </div>
+          ) : null
+        }
       />
 
       <div className="flex-1 overflow-y-auto">
@@ -117,58 +155,26 @@ export function ExerciseSessionScreen({
                   <X className="w-4 h-4" />
                 </button>
               </div>
-            ) : lastSession ? (
-              <button
-                onClick={() => {
-                  // Auto-fill weight from last session (lowest weight)
-                  if (lastSession.sets.length > 0) {
-                    const lowestWeight = Math.min(...lastSession.sets.map(s => s.weight));
-                    setWeight(lowestWeight.toString());
-                  }
-                }}
-                className="w-full px-3 py-2 bg-surface/50 rounded-lg border border-border-subtle text-left hover:bg-surface/70 transition-colors"
-              >
-                <p className="text-xs uppercase tracking-wide text-text-muted mb-1">
-                  Last Session · {formatRelativeTime(lastSession.date)}
-                </p>
-                <div className="flex items-center gap-2 flex-wrap">
-                  {lastSession.sets.map((set, idx) => (
-                    <span key={idx} className="text-sm text-text-primary">
-                      {formatWeight(set.weight)} × {set.reps}
-                    </span>
-                  ))}
-                </div>
-              </button>
             ) : null}
 
             {/* Set logging inputs - at top for priority */}
             <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  placeholder="Weight (kg)"
-                  value={weight}
-                  onChange={(e) => setWeight(e.target.value)}
-                  autoFocus
-                />
-                <Input
-                  type="number"
-                  inputMode="numeric"
-                  placeholder="Reps"
-                  value={reps}
-                  onChange={(e) => setReps(e.target.value)}
-                />
-              </div>
+              <RepsWeightGrid
+                weight={weight}
+                reps={reps}
+                onWeightChange={setWeight}
+                onRepsChange={setReps}
+                weightAutoFocus={true}
+              />
 
               <div className="flex gap-3">
                 <Button
                   variant="primary"
                   onClick={handleAddSet}
-                  disabled={!weight || !reps || parseFloat(weight) <= 0 || parseInt(reps) <= 0}
+                  disabled={weight === '' || reps === '' || isNaN(parseFloat(weight)) || isNaN(parseInt(reps)) || parseFloat(weight) < 0 || parseInt(reps) < 0}
                   className="flex-1"
                 >
-                  Add Set
+                  Log Set
                 </Button>
                 {sets.length > 0 && (
                   <Button
@@ -181,9 +187,34 @@ export function ExerciseSessionScreen({
                   </Button>
                 )}
               </div>
+
+              {/* Last session chips - below inputs (only shown when no sets logged yet) */}
+              {/* Visibility: ONLY show when exercise has 0 committed sets in current session */}
+              {/* Data source: lastSession is strictly from previous completed sessions, never current session */}
+              {sets.length === 0 && lastSession && lastSession.sets && lastSession.sets.length > 0 && (() => {
+                // Create defensive copy to prevent any mutation
+                const lastSessionCopy = {
+                  sets: [...lastSession.sets], // Copy array to prevent mutation
+                  date: lastSession.date,
+                };
+                
+                return (
+                  <LastSessionStats
+                    lastSessionData={lastSessionCopy}
+                    onChipPress={(chipWeightKg, chipReps) => {
+                      // Chip tap only prefills draft inputs - does NOT log a set
+                      // Set will only be logged when user taps "Add Set" button
+                      // chipWeightKg is in kg (canonical), convert to display unit for input
+                      const displayWeight = convertKgToDisplay(chipWeightKg);
+                      setWeight(displayWeight.toString());
+                      setReps(chipReps.toString());
+                    }}
+                  />
+                );
+              })()}
             </div>
 
-            {/* Sets list - below inputs */}
+            {/* Sets list - below inputs (only shown when sets exist) */}
             {sets.length > 0 && (
               <div className="space-y-2">
                 <p className="text-xs uppercase tracking-wide text-text-muted">Sets</p>

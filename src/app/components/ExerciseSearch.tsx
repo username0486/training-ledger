@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { ExerciseSearchInput } from './ExerciseSearchInput';
 import { ExerciseList } from './ExerciseList';
 import { Button } from './Button';
@@ -13,14 +13,14 @@ import { findLikelyReplacements } from '../../utils/exerciseSimilarity';
 import { getSwapScore, getReplacementHistory } from '../../utils/exerciseSwapHistory';
 import { AnyExercise } from '../../utils/exerciseDb/types';
 
-export interface ExerciseSearchHandle {
-  blur: () => void;
-}
+type ExerciseSearchMode = 'ADD_TO_SESSION' | 'PICK_PAIR_TARGET' | 'SWAP' | 'DEFAULT';
 
 interface ExerciseSearchProps {
   onSelectExercise: (exerciseName: string) => void;
   onAddNewExercise?: (exerciseName: string) => void;
-  selectedExercises?: string[];
+  selectedExercises?: string[]; // Exercises already in session/workout (for display)
+  inSessionExercises?: string[]; // Exercises in current session (for PICK_PAIR_TARGET mode)
+  mode?: ExerciseSearchMode; // Determines selection behavior
   placeholder?: string;
   autoFocus?: boolean;
   showDetails?: boolean;
@@ -36,26 +36,20 @@ interface ExerciseSearchProps {
  * - Workout creation search
  * - Workout session "Add exercise" search
  */
-export const ExerciseSearch = forwardRef<ExerciseSearchHandle, ExerciseSearchProps>(({
+export function ExerciseSearch({
   onSelectExercise,
   onAddNewExercise,
   selectedExercises = [],
+  inSessionExercises = [],
+  mode = 'ADD_TO_SESSION',
   placeholder = 'Search exercises...',
   autoFocus = false,
   showDetails = true,
   createButtonLabel = 'Create & start',
   swapContext,
-}, ref) => {
+}: ExerciseSearchProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [allExercises, setAllExercises] = useState<ExerciseDBEntry[]>([]);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  // Expose blur method to parent
-  useImperativeHandle(ref, () => ({
-    blur: () => {
-      inputRef.current?.blur();
-    },
-  }));
 
   // Load all exercises on mount
   useEffect(() => {
@@ -103,7 +97,12 @@ export const ExerciseSearch = forwardRef<ExerciseSearchHandle, ExerciseSearchPro
     if (!searchTerm.trim()) {
       return { matches: [], related: [] };
     }
-    return searchExercisesWithIntent(allExercises, searchTerm);
+    const results = searchExercisesWithIntent(allExercises, searchTerm);
+    // Ensure matches and related are always arrays
+    return {
+      matches: Array.isArray(results?.matches) ? results.matches : [],
+      related: Array.isArray(results?.related) ? results.related : [],
+    };
   }, [searchTerm, allExercises]);
 
   // Likely replacements (only shown in swap context when query is empty or minimal)
@@ -235,6 +234,9 @@ export const ExerciseSearch = forwardRef<ExerciseSearchHandle, ExerciseSearchPro
   const hasSearchResults = searchResults.matches.length > 0 || searchResults.related.length > 0;
   const hasRecents = recentExercises.length > 0;
 
+  // Ref for the search input to allow programmatic blur
+  const inputRef = useRef<HTMLInputElement>(null);
+
   return (
     <div className="space-y-3">
       {/* Search input - sticky when scrolling */}
@@ -259,7 +261,9 @@ export const ExerciseSearch = forwardRef<ExerciseSearchHandle, ExerciseSearchPro
             <ExerciseList
               exercises={likelyReplacements}
               onSelect={handleSelectExercise}
-              selectedExercises={selectedExercises}
+              selectedExercises={mode === 'ADD_TO_SESSION' ? selectedExercises : []}
+              inSessionExercises={inSessionExercises}
+              mode={mode}
               showDetails={showDetails}
               showSecondaryMuscles={false}
               showCategory={false}
@@ -271,7 +275,9 @@ export const ExerciseSearch = forwardRef<ExerciseSearchHandle, ExerciseSearchPro
             <ExerciseList
               exercises={recentExercises}
               onSelect={handleSelectExercise}
-              selectedExercises={selectedExercises}
+              selectedExercises={mode === 'ADD_TO_SESSION' ? selectedExercises : []}
+              inSessionExercises={inSessionExercises}
+              mode={mode}
               showDetails={showDetails}
               showSecondaryMuscles={false}
               showCategory={false}
@@ -294,7 +300,9 @@ export const ExerciseSearch = forwardRef<ExerciseSearchHandle, ExerciseSearchPro
                 <ExerciseList
                   exercises={searchResults.matches}
                   onSelect={handleSelectExercise}
-                  selectedExercises={selectedExercises}
+                  selectedExercises={mode === 'ADD_TO_SESSION' ? selectedExercises : []}
+                  inSessionExercises={inSessionExercises}
+                  mode={mode}
                   showDetails={showDetails}
                   showSecondaryMuscles={false}
                   showCategory={false}
@@ -316,7 +324,9 @@ export const ExerciseSearch = forwardRef<ExerciseSearchHandle, ExerciseSearchPro
                   <ExerciseList
                     exercises={searchResults.related}
                     onSelect={handleSelectExercise}
-                    selectedExercises={selectedExercises}
+                    selectedExercises={mode === 'ADD_TO_SESSION' ? selectedExercises : []}
+                    inSessionExercises={inSessionExercises}
+                    mode={mode}
                     showDetails={showDetails}
                     showSecondaryMuscles={false}
                     showCategory={false}
@@ -339,7 +349,9 @@ export const ExerciseSearch = forwardRef<ExerciseSearchHandle, ExerciseSearchPro
                   <ExerciseList
                     exercises={likelyReplacements}
                     onSelect={handleSelectExercise}
-                    selectedExercises={selectedExercises}
+                    selectedExercises={mode === 'ADD_TO_SESSION' ? selectedExercises : []}
+                    inSessionExercises={inSessionExercises}
+                    mode={mode}
                     showDetails={showDetails}
                     showSecondaryMuscles={false}
                     showCategory={false}
@@ -385,7 +397,5 @@ export const ExerciseSearch = forwardRef<ExerciseSearchHandle, ExerciseSearchPro
       )}
     </div>
   );
-});
-
-ExerciseSearch.displayName = 'ExerciseSearch';
+}
 
