@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Search, Play, Circle, Check, Trash2, ChevronDown, ChevronRight, Calendar, MoreVertical, Settings, Square, CheckSquare2, ChevronLeft } from 'lucide-react';
+import { Search, Play, Circle, Check, Trash2, ChevronDown, ChevronRight, Calendar, Settings, Square, CheckSquare2, ChevronLeft, X } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Input } from '../components/Input';
 import { Modal } from '../components/Modal';
@@ -35,6 +35,7 @@ interface HistoryScreenProps {
   onDeleteWorkouts: (workoutIds: string[]) => void;
   onStateChange: (searchQuery: string, scrollPosition: number) => void;
   onOpenSettings: () => void;
+  onUpdateWorkoutName?: (workoutId: string, newName: string) => void;
 }
 
 export function HistoryScreen({
@@ -52,6 +53,7 @@ export function HistoryScreen({
   onDeleteWorkouts,
   onStateChange,
   onOpenSettings,
+  onUpdateWorkoutName,
 }: HistoryScreenProps) {
   const [searchQuery, setSearchQuery] = useState(initialSearchQuery);
   const [filter, setFilter] = useState<'all' | 'workouts' | 'exercises'>('all');
@@ -159,9 +161,11 @@ export function HistoryScreen({
     
     // Apply type filter
     if (filter === 'workouts') {
-      result = result.filter(w => !isExerciseOnlyEntry(w));
+      // Use sessionType if available, otherwise fall back to isExerciseOnlyEntry
+      result = result.filter(w => w.sessionType === 'workout' || (!w.sessionType && !isExerciseOnlyEntry(w)));
     } else if (filter === 'exercises') {
-      result = result.filter(w => isExerciseOnlyEntry(w));
+      // Use sessionType if available, otherwise fall back to isExerciseOnlyEntry
+      result = result.filter(w => w.sessionType === 'exercise' || (!w.sessionType && isExerciseOnlyEntry(w)));
     }
     
     // Apply month/year filter
@@ -571,7 +575,13 @@ export function HistoryScreen({
                                     </div>
                                   )}
 
-                                  <div className="flex-1 min-w-0">
+                                  <div 
+                                    className="flex-1 min-w-0 cursor-pointer"
+                                    onClick={() => {
+                                      captureScrollPosition();
+                                      onViewWorkout(workout.id);
+                                    }}
+                                  >
                                     <h3 className="mb-1 truncate">{workout.name}</h3>
                                     <p className="text-text-muted text-sm">
                                       {formatDate(workout.endTime || workout.startTime)} · {formatTimeAgo(workout.endTime || workout.startTime)} · {workout.exercises.length} {workout.exercises.length === 1 ? 'exercise' : 'exercises'}

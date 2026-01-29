@@ -5,8 +5,8 @@
 
 import { getUnitSystem, UnitSystem } from './preferences';
 
-// Conversion constants
-const KG_TO_LB = 2.20462;
+// Conversion constants (precise conversion factor)
+const KG_TO_LB = 2.2046226218;
 const LB_TO_KG = 1 / KG_TO_LB;
 
 /**
@@ -29,11 +29,20 @@ export function lbToKg(lb: number): number {
  * @param decimals - Number of decimal places (default: 1)
  * @returns Formatted string with unit (e.g., "100.0 kg" or "220.5 lb")
  */
-export function formatWeight(weightKg: number, decimals: number = 1): string {
+export function formatWeight(weightKg: number | null | undefined, decimals: number = 1): string {
+  // Handle null/undefined values and ensure it's a valid number
+  if (weightKg === null || weightKg === undefined || typeof weightKg !== 'number' || isNaN(weightKg) || !isFinite(weightKg)) {
+    return '—';
+  }
+  
   const unitSystem = getUnitSystem();
   
   if (unitSystem === 'imperial') {
     const lb = kgToLb(weightKg);
+    // Double-check the converted value is valid
+    if (lb === null || lb === undefined || isNaN(lb) || !isFinite(lb)) {
+      return '—';
+    }
     return `${lb.toFixed(decimals)} lb`;
   }
   
@@ -55,6 +64,43 @@ export function formatWeightValue(weightKg: number, decimals: number = 1): strin
   }
   
   return weightKg.toFixed(decimals);
+}
+
+/**
+ * Format weight for display without decimals for whole numbers
+ * Removes unnecessary decimal places (e.g., 50.0 → 50, but 52.5 → 52.5)
+ * Used in set chips and since-last-set displays
+ * @param weightKg - Weight in kilograms (internal storage format)
+ * @returns Formatted number string without unit, with decimals only if needed
+ */
+export function formatWeightForDisplay(weightKg: number | null | undefined): string {
+  // Handle null/undefined values
+  if (weightKg === null || weightKg === undefined || typeof weightKg !== 'number' || isNaN(weightKg) || !isFinite(weightKg)) {
+    return '—';
+  }
+  
+  const unitSystem = getUnitSystem();
+  let displayValue: number;
+  
+  if (unitSystem === 'imperial') {
+    displayValue = kgToLb(weightKg);
+    // Double-check the converted value is valid
+    if (displayValue === null || displayValue === undefined || isNaN(displayValue) || !isFinite(displayValue)) {
+      return '—';
+    }
+  } else {
+    displayValue = weightKg;
+  }
+  
+  // If it's a whole number, return as integer string
+  if (Number.isInteger(displayValue)) {
+    return displayValue.toString();
+  }
+  
+  // Otherwise, format with decimals and trim trailing zeros
+  // Use toFixed to ensure proper decimal formatting, then remove trailing zeros
+  const formatted = displayValue.toFixed(2);
+  return formatted.replace(/\.?0+$/, '');
 }
 
 /**
@@ -90,7 +136,7 @@ export function parseWeightInput(input: string): number {
  * @returns Step size in the current unit system
  */
 export function getWeightStep(): number {
-  return getUnitSystem() === 'imperial' ? 0.5 : 0.25;
+  return getUnitSystem() === 'imperial' ? 1 : 0.5;
 }
 
 /**
@@ -98,6 +144,32 @@ export function getWeightStep(): number {
  * @returns Step size in kilograms
  */
 export function getWeightStepKg(): number {
-  return getUnitSystem() === 'imperial' ? lbToKg(0.5) : 0.25;
+  return getUnitSystem() === 'imperial' ? lbToKg(1) : 0.5;
+}
+
+/**
+ * Convert weight from kg (canonical) to display unit
+ * @param weightKg - Weight in kilograms (canonical storage format)
+ * @returns Weight in the current display unit
+ */
+export function convertKgToDisplay(weightKg: number): number {
+  const unitSystem = getUnitSystem();
+  if (unitSystem === 'imperial') {
+    return kgToLb(weightKg);
+  }
+  return weightKg;
+}
+
+/**
+ * Convert weight from display unit to kg (canonical)
+ * @param weightDisplay - Weight in the current display unit
+ * @returns Weight in kilograms (canonical storage format)
+ */
+export function convertDisplayToKg(weightDisplay: number): number {
+  const unitSystem = getUnitSystem();
+  if (unitSystem === 'imperial') {
+    return lbToKg(weightDisplay);
+  }
+  return weightDisplay;
 }
 

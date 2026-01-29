@@ -1,24 +1,74 @@
 import { Workout } from '../types';
 import { IncompleteExerciseSession } from '../types';
+import { CurrentLog, AdHocLoggingSession } from '../types';
+import { computeDurationSec } from './duration';
+import { loadState, saveState } from '../storage/storageGateway';
 
+// Legacy keys (kept for migration compatibility)
 const WORKOUTS_KEY = 'workout_logs_workouts';
 const INCOMPLETE_EXERCISE_KEY = 'workout_logs_incomplete_exercise';
 const INCOMPLETE_WORKOUT_KEY = 'workout_logs_incomplete_workout';
+const CURRENT_LOG_KEY = 'workout_logs_current_log';
+const AD_HOC_SESSION_KEY = 'workout_logs_ad_hoc_session';
 
 export function saveWorkouts(workouts: Workout[]): void {
   try {
-    localStorage.setItem(WORKOUTS_KEY, JSON.stringify(workouts));
+    // Load current state, update workouts, save
+    const result = loadState();
+    if (result.success && result.state) {
+      const updatedState = {
+        ...result.state,
+        workouts,
+      };
+      saveState(updatedState);
+    } else {
+      // Fallback to legacy storage if gateway fails
+      localStorage.setItem(WORKOUTS_KEY, JSON.stringify(workouts));
+    }
   } catch (error) {
     console.error('Failed to save workouts:', error);
+    // Fallback to legacy storage
+    try {
+      localStorage.setItem(WORKOUTS_KEY, JSON.stringify(workouts));
+    } catch (fallbackError) {
+      console.error('Fallback save also failed:', fallbackError);
+    }
   }
 }
 
 export function loadWorkouts(): Workout[] {
   try {
+    const result = loadState();
+    if (result.success && result.state) {
+      return result.state.workouts || [];
+    }
+    
+    // Fallback to legacy storage if gateway fails
     const data = localStorage.getItem(WORKOUTS_KEY);
-    return data ? JSON.parse(data) : [];
+    const raw: Workout[] = data ? JSON.parse(data) : [];
+
+    // Migration: ensure new timing fields exist (canonical timestamps remain startTime/endTime)
+    return raw.map((w: any) => {
+      const startedAt = typeof w.startedAt === 'number' ? w.startedAt : (typeof w.startTime === 'number' ? w.startTime : Date.now());
+      const endedAt = typeof w.endedAt === 'number' ? w.endedAt : (typeof w.endTime === 'number' ? w.endTime : undefined);
+      const durationSec =
+        typeof w.durationSec === 'number'
+          ? w.durationSec
+          : endedAt
+            ? computeDurationSec(startedAt, endedAt)
+            : undefined;
+
+      return {
+        ...w,
+        startedAt,
+        endedAt,
+        durationSec,
+      };
+    });
   } catch (error) {
     console.error('Failed to load workouts:', error);
+    // NEVER return empty array on error - preserve data
+    // Return empty array only if truly no data exists
     return [];
   }
 }
@@ -29,18 +79,44 @@ export function getUnfinishedWorkout(workouts: Workout[]): Workout | null {
 
 export function saveIncompleteWorkoutId(workoutId: string | null): void {
   try {
-    if (workoutId) {
-      localStorage.setItem(INCOMPLETE_WORKOUT_KEY, workoutId);
+    const result = loadState();
+    if (result.success && result.state) {
+      const updatedState = {
+        ...result.state,
+        incompleteWorkoutId: workoutId,
+      };
+      saveState(updatedState);
     } else {
-      localStorage.removeItem(INCOMPLETE_WORKOUT_KEY);
+      // Fallback to legacy storage
+      if (workoutId) {
+        localStorage.setItem(INCOMPLETE_WORKOUT_KEY, workoutId);
+      } else {
+        localStorage.removeItem(INCOMPLETE_WORKOUT_KEY);
+      }
     }
   } catch (error) {
     console.error('Failed to save incomplete workout ID:', error);
+    // Fallback to legacy storage
+    try {
+      if (workoutId) {
+        localStorage.setItem(INCOMPLETE_WORKOUT_KEY, workoutId);
+      } else {
+        localStorage.removeItem(INCOMPLETE_WORKOUT_KEY);
+      }
+    } catch (fallbackError) {
+      console.error('Fallback save also failed:', fallbackError);
+    }
   }
 }
 
 export function loadIncompleteWorkoutId(): string | null {
   try {
+    const result = loadState();
+    if (result.success && result.state) {
+      return result.state.incompleteWorkoutId ?? null;
+    }
+    
+    // Fallback to legacy storage
     return localStorage.getItem(INCOMPLETE_WORKOUT_KEY);
   } catch (error) {
     console.error('Failed to load incomplete workout ID:', error);
@@ -50,20 +126,63 @@ export function loadIncompleteWorkoutId(): string | null {
 
 export function saveIncompleteExerciseSession(session: IncompleteExerciseSession | null): void {
   try {
-    if (session) {
-      localStorage.setItem(INCOMPLETE_EXERCISE_KEY, JSON.stringify(session));
+    const result = loadState();
+    if (result.success && result.state) {
+      const updatedState = {
+        ...result.state,
+        incompleteExerciseSession: session,
+      };
+      saveState(updatedState);
     } else {
-      localStorage.removeItem(INCOMPLETE_EXERCISE_KEY);
+      // Fallback to legacy storage
+      if (session) {
+        localStorage.setItem(INCOMPLETE_EXERCISE_KEY, JSON.stringify(session));
+      } else {
+        localStorage.removeItem(INCOMPLETE_EXERCISE_KEY);
+      }
     }
   } catch (error) {
     console.error('Failed to save incomplete exercise session:', error);
+    // Fallback to legacy storage
+    try {
+      if (session) {
+        localStorage.setItem(INCOMPLETE_EXERCISE_KEY, JSON.stringify(session));
+      } else {
+        localStorage.removeItem(INCOMPLETE_EXERCISE_KEY);
+      }
+    } catch (fallbackError) {
+      console.error('Fallback save also failed:', fallbackError);
+    }
   }
 }
 
 export function loadIncompleteExerciseSession(): IncompleteExerciseSession | null {
   try {
+    const result = loadState();
+    if (result.success && result.state) {
+      return result.state.incompleteExerciseSession ?? null;
+    }
+    
+    // Fallback to legacy storage
     const data = localStorage.getItem(INCOMPLETE_EXERCISE_KEY);
-    return data ? JSON.parse(data) : null;
+    const raw: any = data ? JSON.parse(data) : null;
+    if (!raw) return null;
+
+    const startedAt = typeof raw.startedAt === 'number' ? raw.startedAt : (typeof raw.startTime === 'number' ? raw.startTime : Date.now());
+    const endedAt = typeof raw.endedAt === 'number' ? raw.endedAt : undefined;
+    const durationSec =
+      typeof raw.durationSec === 'number'
+        ? raw.durationSec
+        : endedAt
+          ? computeDurationSec(startedAt, endedAt)
+          : undefined;
+
+    return {
+      ...raw,
+      startedAt,
+      endedAt,
+      durationSec,
+    };
   } catch (error) {
     console.error('Failed to load incomplete exercise session:', error);
     return null;
@@ -99,7 +218,14 @@ export function getExerciseHistory(workouts: Workout[]): Map<string, { lastPerfo
   return history;
 }
 
+/**
+ * Get the last completed session data for an exercise.
+ * IMPORTANT: Only returns data from completed workouts (isComplete === true).
+ * Never includes data from active/in-progress sessions.
+ * Returns a defensive copy to prevent mutation.
+ */
 export function getLastSessionForExercise(exerciseName: string, workouts: Workout[]): { sets: Array<{ weight: number; reps: number }>; date: number } | null {
+  // Strictly filter to only completed workouts (never include active/in-progress)
   const completedWorkouts = workouts
     .filter(w => w.isComplete && w.endTime)
     .sort((a, b) => (b.endTime || 0) - (a.endTime || 0));
@@ -107,6 +233,7 @@ export function getLastSessionForExercise(exerciseName: string, workouts: Workou
   for (const workout of completedWorkouts) {
     const exercise = workout.exercises.find(ex => ex.name === exerciseName);
     if (exercise && exercise.sets.length > 0) {
+      // Return defensive copy - never return reference to original data
       return {
         sets: exercise.sets.map(s => ({ weight: s.weight, reps: s.reps })),
         date: workout.endTime || 0,
@@ -171,7 +298,7 @@ export function formatRelativeTime(timestamp: number): string {
   if (minutes < 60) return `${minutes} minutes ago`;
   if (hours === 1) return '1 hour ago';
   if (hours < 24) return `${hours} hours ago`;
-  if (days === 1) return '1 day ago';
+  if (days === 1) return 'Yesterday';
   if (days < 7) return `${days} days ago`;
   if (weeks === 1) return '1 week ago';
   if (weeks < 4) return `${weeks} weeks ago`;
@@ -195,4 +322,96 @@ export function formatDate(timestamp: number): string {
   }
   
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+export function saveCurrentLog(currentLog: CurrentLog | null): void {
+  try {
+    if (currentLog) {
+      localStorage.setItem(CURRENT_LOG_KEY, JSON.stringify(currentLog));
+    } else {
+      localStorage.removeItem(CURRENT_LOG_KEY);
+    }
+  } catch (error) {
+    console.error('Failed to save current log:', error);
+  }
+}
+
+export function loadCurrentLog(): CurrentLog | null {
+  try {
+    const data = localStorage.getItem(CURRENT_LOG_KEY);
+    return data ? JSON.parse(data) : null;
+  } catch (error) {
+    console.error('Failed to load current log:', error);
+    return null;
+  }
+}
+
+export function saveAdHocLoggingSession(session: AdHocLoggingSession | null): void {
+  try {
+    const result = loadState();
+    if (result.success && result.state) {
+      const updatedState = {
+        ...result.state,
+        adHocSession: session,
+      };
+      saveState(updatedState);
+    } else {
+      // Fallback to legacy storage
+      if (session) {
+        localStorage.setItem(AD_HOC_SESSION_KEY, JSON.stringify(session));
+      } else {
+        localStorage.removeItem(AD_HOC_SESSION_KEY);
+      }
+    }
+  } catch (error) {
+    console.error('Failed to save ad-hoc logging session:', error);
+    // Fallback to legacy storage
+    try {
+      if (session) {
+        localStorage.setItem(AD_HOC_SESSION_KEY, JSON.stringify(session));
+      } else {
+        localStorage.removeItem(AD_HOC_SESSION_KEY);
+      }
+    } catch (fallbackError) {
+      console.error('Fallback save also failed:', fallbackError);
+    }
+  }
+}
+
+export function loadAdHocLoggingSession(): AdHocLoggingSession | null {
+  try {
+    const result = loadState();
+    if (result.success && result.state) {
+      return result.state.adHocSession ?? null;
+    }
+    
+    // Fallback to legacy storage
+    const data = localStorage.getItem(AD_HOC_SESSION_KEY);
+    const raw: any = data ? JSON.parse(data) : null;
+    if (!raw) return null;
+
+    const startedAt = typeof raw.startedAt === 'number' ? raw.startedAt : (typeof raw.startTime === 'number' ? raw.startTime : (typeof raw.createdAt === 'number' ? raw.createdAt : Date.now()));
+    const endedAt = typeof raw.endedAt === 'number' ? raw.endedAt : (typeof raw.endTime === 'number' ? raw.endTime : undefined);
+    const durationSec =
+      typeof raw.durationSec === 'number'
+        ? raw.durationSec
+        : (raw.createdAt && raw.endTime)
+          ? computeDurationSec(raw.createdAt, raw.endTime)
+          : undefined;
+
+    return {
+      ...raw,
+      startedAt,
+      endedAt,
+      durationSec,
+    };
+  } catch (error) {
+    console.error('Failed to load ad-hoc logging session:', error);
+    return null;
+  }
+}
+
+export function getActiveAdHocSession(): AdHocLoggingSession | null {
+  const session = loadAdHocLoggingSession();
+  return session && session.status === 'active' ? session : null;
 }
