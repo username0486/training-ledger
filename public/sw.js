@@ -1,8 +1,10 @@
 // Service Worker for Training Ledger PWA
-const CACHE_NAME = 'training-ledger-v1';
-const RUNTIME_CACHE = 'training-ledger-runtime-v1';
+// Build version injected at build time
+const BUILD_VERSION = '__BUILD_VERSION__';
+const CACHE_NAME = `tl-shell-${BUILD_VERSION}`;
+const RUNTIME_CACHE = `tl-runtime-${BUILD_VERSION}`;
 
-// Assets to cache on install
+// Assets to cache on install (minimal app shell)
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -13,41 +15,52 @@ const PRECACHE_ASSETS = [
 
 // Install event - cache app shell
 self.addEventListener('install', (event) => {
-  console.log('[Service Worker] Installing...');
+  console.log('[Service Worker] Installing version', BUILD_VERSION);
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       console.log('[Service Worker] Caching app shell');
-      return cache.addAll(PRECACHE_ASSETS);
-    }).catch((error) => {
-      console.error('[Service Worker] Cache install failed:', error);
+      return cache.addAll(PRECACHE_ASSETS).catch((error) => {
+        console.error('[Service Worker] Cache install failed:', error);
+        // Don't fail installation if some assets fail to cache
+      });
     })
   );
-  // Force the waiting service worker to become the active service worker
+  // Force the waiting service worker to become the active service worker immediately
   self.skipWaiting();
 });
 
 // Activate event - clean up old caches
 self.addEventListener('activate', (event) => {
-  console.log('[Service Worker] Activating...');
+  console.log('[Service Worker] Activating version', BUILD_VERSION);
   event.waitUntil(
     caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames
-          .filter((cacheName) => {
-            return cacheName !== CACHE_NAME && cacheName !== RUNTIME_CACHE;
-          })
-          .map((cacheName) => {
-            console.log('[Service Worker] Deleting old cache:', cacheName);
-            return caches.delete(cacheName);
-          })
-      );
+      // Delete all caches that don't match current version
+      const deletePromises = cacheNames
+        .filter((cacheName) => {
+          // Keep only caches that match current version
+          return cacheName !== CACHE_NAME && cacheName !== RUNTIME_CACHE;
+        })
+        .map((cacheName) => {
+          console.log('[Service Worker] Deleting old cache:', cacheName);
+          return caches.delete(cacheName);
+        });
+      
+      return Promise.all(deletePromises);
     })
   );
   // Take control of all clients immediately
   return self.clients.claim();
 });
 
-// Fetch event - serve from cache, fallback to network
+// Handle skip waiting message from client
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    console.log('[Service Worker] Received SKIP_WAITING message');
+    self.skipWaiting();
+  }
+});
+
+// Fetch event - implement proper strategies
 self.addEventListener('fetch', (event) => {
   // Skip cross-origin requests
   if (!event.request.url.startsWith(self.location.origin)) {
@@ -55,10 +68,18 @@ self.addEventListener('fetch', (event) => {
   }
 
   const url = new URL(event.request.url);
+  const requestUrl = url.pathname;
   
+  // Never cache API/data responses
+  if (url.pathname.startsWith('/api/') || 
+      url.pathname.includes('/functions/') ||
+      url.searchParams.has('_data')) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
   // Special handling for systemExercises.json - never return HTML fallback
-  // Handle both /exercises/systemExercises.json and /systemExercises.json paths
-  if (url.pathname === '/exercises/systemExercises.json' || url.pathname === '/systemExercises.json') {
+  if (requestUrl === '/exercises/systemExercises.json' || requestUrl === '/systemExercises.json') {
     event.respondWith(
       fetch(event.request, { cache: 'no-store' })
         .then((response) => {
@@ -85,37 +106,70 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      // Return cached version if available
-      if (cachedResponse) {
-        return cachedResponse;
-      }
-
-      // Otherwise, fetch from network
-      return fetch(event.request).then((response) => {
-        // Don't cache non-successful responses
-        if (!response || response.status !== 200 || response.type !== 'basic') {
+  // Navigation requests (HTML) - Network-first to get latest deploy
+  if (event.request.mode === 'navigate' || 
+      (event.request.method === 'GET' && event.request.headers.get('accept')?.includes('text/html'))) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          // Cache successful HTML responses
+          if (response.ok) {
+            const responseToCache = response.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(event.request, responseToCache);
+            });
+          }
           return response;
+        })
+        .catch(() => {
+          // Fallback to cached HTML if network fails
+          return caches.match('/index.html') || caches.match(event.request);
+        })
+    );
+    return;
+  }
+
+  // Hashed assets (JS/CSS) - Cache-first for performance
+  // These have content hashes in their filenames, so they're versioned
+  if (requestUrl.startsWith('/assets/') || 
+      requestUrl.match(/\.(js|css|woff2?|png|jpg|jpeg|svg|ico)$/i)) {
+    event.respondWith(
+      caches.match(event.request).then((cachedResponse) => {
+        if (cachedResponse) {
+          return cachedResponse;
         }
-
-        // Clone the response
-        const responseToCache = response.clone();
-
-        // Cache the fetched resource
-        caches.open(RUNTIME_CACHE).then((cache) => {
-          cache.put(event.request, responseToCache);
+        
+        // Fetch from network and cache
+        return fetch(event.request).then((response) => {
+          if (response.ok) {
+            const responseToCache = response.clone();
+            caches.open(RUNTIME_CACHE).then((cache) => {
+              cache.put(event.request, responseToCache);
+            });
+          }
+          return response;
         });
+      })
+    );
+    return;
+  }
 
-        return response;
-      }).catch(() => {
-        // If both cache and network fail, return a fallback
-        // For navigation requests, return the cached index.html
-        if (event.request.mode === 'navigate') {
-          return caches.match('/index.html');
+  // Default: Network-first for other resources
+  event.respondWith(
+    fetch(event.request)
+      .then((response) => {
+        // Cache successful responses
+        if (response.ok && response.type === 'basic') {
+          const responseToCache = response.clone();
+          caches.open(RUNTIME_CACHE).then((cache) => {
+            cache.put(event.request, responseToCache);
+          });
         }
-      });
-    })
+        return response;
+      })
+      .catch(() => {
+        // Fallback to cache
+        return caches.match(event.request);
+      })
   );
 });
-
