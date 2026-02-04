@@ -38,23 +38,6 @@ export function formatElapsed(seconds: number): string {
 }
 
 /**
- * Format "x ago" style relative time from timestamp
- * Uses nowMs for consistent computation across re-renders
- */
-export function formatAgo(lastSetAtMs: number, nowMs: number): string {
-  const diff = nowMs - lastSetAtMs;
-  const minutes = Math.floor(diff / 60000);
-  const hours = Math.floor(diff / 3600000);
-  const days = Math.floor(diff / 86400000);
-  const weeks = Math.floor(diff / 604800000);
-  
-  if (minutes < 60) return `${minutes}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  if (days < 7) return `${days}d ago`;
-  return `${weeks}w ago`;
-}
-
-/**
  * Get the most recent lastSetAt timestamp from a group of exercises
  * Used for supersets/groups where all exercises share the same rest context
  */

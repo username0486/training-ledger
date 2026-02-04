@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { Download, Upload, Trash2, ChevronLeft } from 'lucide-react';
+import { Download, Upload, Trash2 } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
@@ -14,6 +14,7 @@ interface BackupsAndDataScreenProps {
 
 export function BackupsAndDataScreen({ onBack, onDataImported, onDataDeleted }: BackupsAndDataScreenProps) {
   const [showImport, setShowImport] = useState(false);
+  const [showImportConfirm, setShowImportConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [importText, setImportText] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
@@ -45,17 +46,30 @@ export function BackupsAndDataScreen({ onBack, onDataImported, onDataDeleted }: 
       return;
     }
 
+    // Show confirmation dialog before importing
+    setShowImportConfirm(true);
+  };
+
+  const handleImportConfirm = () => {
+    if (!importText.trim()) {
+      setImportError('Please paste JSON data to import');
+      setShowImportConfirm(false);
+      return;
+    }
+
     const result = importData(importText);
     if (result.success) {
       setImportError(null);
       setImportText('');
       setShowImport(false);
+      setShowImportConfirm(false);
       if (onDataImported) {
         onDataImported();
       }
       alert('Data imported successfully!');
     } else {
       setImportError(result.error || 'Failed to import data');
+      setShowImportConfirm(false);
     }
   };
 
@@ -212,6 +226,34 @@ export function BackupsAndDataScreen({ onBack, onDataImported, onDataDeleted }: 
                 setImportText('');
                 setImportError(null);
               }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </CompactBottomSheet>
+
+      {/* Import Confirmation Bottom Sheet */}
+      <CompactBottomSheet
+        isOpen={showImportConfirm}
+        onClose={() => setShowImportConfirm(false)}
+        title="Import backup?"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-text-muted">
+            This will replace all your current data. This can't be undone.
+          </p>
+          <div className="flex gap-2">
+            <Button
+              variant="primary"
+              onClick={handleImportConfirm}
+              className="flex-1"
+            >
+              Import
+            </Button>
+            <Button
+              variant="neutral"
+              onClick={() => setShowImportConfirm(false)}
             >
               Cancel
             </Button>
