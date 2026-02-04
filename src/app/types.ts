@@ -4,6 +4,7 @@ export interface Exercise {
   sets: Set[];
   isComplete?: boolean;
   groupId?: string | null; // exercises with same groupId are grouped (superset/tri-set)
+  lastSetAt?: number; // timestamp of last set logged for this exercise (for rest timer)
 }
 
 export interface Set {
@@ -28,6 +29,8 @@ export interface Workout {
   isUserNamed?: boolean; // Flag to prevent auto-naming override
   sessionType?: 'exercise' | 'workout'; // Classification: exercise (1) or workout (2+)
   templateId?: string; // Reference to WorkoutTemplate if created from template
+  lastSetAt?: number | null; // session-level timestamp of most recent set logged
+  lastSetOwnerId?: string | null; // exercise instance ID or group ID that owns the most recent set
 }
 
 export interface IncompleteExerciseSession {
@@ -37,7 +40,9 @@ export interface IncompleteExerciseSession {
   startedAt: number; // persisted session start timestamp (ms)
   endedAt?: number; // persisted session end timestamp (ms)
   durationSec?: number; // persisted total duration in seconds
-  restTimerStart?: number | null;
+  lastSetAt?: number | null; // session-level timestamp of most recent set logged
+  lastSetOwnerId?: string | null; // exercise instance ID (always the same exercise for single-exercise sessions)
+  restTimerStart?: number | null; // DEPRECATED: kept for migration, use lastSetAt instead
 }
 
 export interface ExerciseHistory {
@@ -73,12 +78,15 @@ export interface AdHocLoggingSession {
     sets: Set[];
     isComplete?: boolean;
     groupId?: string | null; // exercises with same groupId are grouped (superset/tri-set)
+    lastSetAt?: number; // timestamp of last set logged for this exercise (for rest timer)
   }>;
   startTime: number;
   endTime?: number;
   startedAt: number; // persisted session start timestamp (ms)
   endedAt?: number; // persisted session end timestamp (ms)
   durationSec?: number; // persisted total duration in seconds
+  lastSetAt?: number | null; // session-level timestamp of most recent set logged
+  lastSetOwnerId?: string | null; // exercise instance ID or group ID that owns the most recent set
   groups?: { [groupId: string]: { createdAt: number } }; // optional helper map
   name?: string; // User-editable session name
   isUserNamed?: boolean; // Flag to prevent auto-naming override
@@ -91,5 +99,7 @@ export type Screen =
   | { type: 'exercise-session'; exerciseName: string; previousScreen?: AppScreen }
   | { type: 'workout-summary'; workoutId: string; isJustCompleted?: boolean; isSingleExercise?: boolean; previousScreen?: AppScreen }
   | { type: 'history'; searchQuery?: string; scrollPosition?: number; restoreKey?: number }
+  | { type: 'settings'; previousScreen?: AppScreen }
+  | { type: 'backups-and-data'; previousScreen?: AppScreen }
   | { type: 'start-logging' }
   | { type: 'ad-hoc-session'; sessionId: string };

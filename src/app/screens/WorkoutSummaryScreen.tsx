@@ -11,6 +11,7 @@ import { formatDate } from '../utils/storage';
 import { formatWeight } from '../../utils/weightFormat';
 import { buildSessionItems } from '../utils/exerciseGrouping';
 import { formatDuration, getElapsedSec } from '../utils/duration';
+import { getSetsInDisplayOrder } from '../utils/setOrdering';
 
 interface WorkoutSummaryScreenProps {
   workout: Workout;
@@ -226,7 +227,9 @@ export function WorkoutSummaryScreen({
 
                               {/* Sets */}
                               <div className="space-y-2 mb-3">
-                                {exercise.sets.map((set, index) => (
+                                {(() => {
+                                  const sortedSets = getSetsInDisplayOrder(exercise.sets);
+                                  return sortedSets.map((set, index) => (
                                   <div
                                     key={set.id}
                                     className="flex items-center justify-between p-2 bg-surface rounded-lg"
@@ -238,7 +241,8 @@ export function WorkoutSummaryScreen({
                                       <span className="text-sm">{set.reps} reps</span>
                                     </div>
                                   </div>
-                                ))}
+                                  ));
+                                })()}
                               </div>
 
                               {/* Stats */}
@@ -298,7 +302,9 @@ export function WorkoutSummaryScreen({
 
                     {/* Sets */}
                     <div className="space-y-2 mb-4">
-                      {exercise.sets.map((set, index) => (
+                      {(() => {
+                        const sortedSets = getSetsInDisplayOrder(exercise.sets);
+                        return sortedSets.map((set, index) => (
                         <div
                           key={set.id}
                           className="flex items-center justify-between p-3 bg-surface rounded-lg"
@@ -310,7 +316,8 @@ export function WorkoutSummaryScreen({
                             <span>{set.reps} reps</span>
                           </div>
                         </div>
-                      ))}
+                        ));
+                      })()}
                     </div>
 
                     {/* Stats */}

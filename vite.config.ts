@@ -5,6 +5,16 @@ import react from '@vitejs/plugin-react'
 import { execSync } from 'child_process'
 import { readFileSync, writeFileSync } from 'fs'
 
+// Read package.json for version
+function getAppVersion(): string {
+  try {
+    const packageJson = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'))
+    return packageJson.version || 'dev'
+  } catch {
+    return 'dev'
+  }
+}
+
 // Generate build version (commit hash or timestamp)
 function getBuildVersion(): string {
   try {
@@ -16,6 +26,7 @@ function getBuildVersion(): string {
   }
 }
 
+const APP_VERSION = getAppVersion()
 const BUILD_VERSION = getBuildVersion()
 
 export default defineConfig({
@@ -24,6 +35,18 @@ export default defineConfig({
     // Tailwind is not being actively used – do not remove them
     react(),
     tailwindcss(),
+    // Inject version info as environment variables
+    {
+      name: 'inject-version-env',
+      config() {
+        return {
+          define: {
+            'import.meta.env.VITE_APP_VERSION': JSON.stringify(APP_VERSION),
+            'import.meta.env.VITE_GIT_SHA': JSON.stringify(BUILD_VERSION),
+          },
+        }
+      },
+    },
     // Inject build version into service worker
     {
       name: 'inject-build-version-sw',

@@ -137,8 +137,8 @@ export function StartLoggingScreen({
   const exerciseCount = session?.exercises.length || 0;
   const buttonLabel = firstExercise
     ? (exerciseCount > 1 
-        ? 'Continue training' 
-        : (firstExercise.name.length > 20 ? 'Log first exercise' : `Log ${firstExercise.name}`))
+        ? 'Log workout' 
+        : `Log ${firstExercise.name}`)
     : '';
 
   const handleStartLogging = () => {

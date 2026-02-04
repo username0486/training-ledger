@@ -1,16 +1,20 @@
 import { useState, useEffect } from 'react';
 import { X, MoreHorizontal, UserMinus, ArrowRightLeft, SkipForward } from 'lucide-react';
-import { Exercise, Set } from '../types';
+import { Exercise, Set, Workout } from '../types';
 import { formatWeight, formatWeightForDisplay, convertKgToDisplay } from '../../utils/weightFormat';
 import { CompactBottomSheet } from './CompactBottomSheet';
 import { OverflowActionGroup } from './OverflowActionGroup';
 import { CompletedSetsPanel } from './CompletedSetsPanel';
 import { RepsWeightGrid } from './RepsWeightGrid';
 import { LastSessionStats } from './LastSessionStats';
+import { ExerciseHistoryBottomSheet } from './ExerciseHistoryBottomSheet';
+import { getRecentSessionsForExercise } from '../utils/storage';
+import { getComparisonFlag } from '../utils/exerciseComparison';
 
 interface ExerciseCardLoggerProps {
   exercise: Exercise;
   lastSessionData?: { sets: Array<{ weight: number; reps: number }>; date: number } | null;
+  allWorkouts?: Workout[]; // All workouts for history and comparison
   onInputChange: (exerciseId: string, weight: string, reps: string) => void;
   onRemove?: (exerciseId: string) => void;
   weight: string;
@@ -25,11 +29,14 @@ interface ExerciseCardLoggerProps {
   onDeleteSet?: (exerciseId: string, setId: string) => void;
   onUpdateSet?: (exerciseId: string, setId: string, weight: number, reps: number) => void;
   onSelectSet?: (exerciseId: string, setId: string, setIndex: number) => void;
+  // Timer props
+  nowMs?: number; // current timestamp for consistent elapsed time computation
 }
 
 export function ExerciseCardLogger({
   exercise,
   lastSessionData,
+  allWorkouts = [],
   onInputChange,
   onRemove,
   weight,
@@ -42,10 +49,23 @@ export function ExerciseCardLogger({
   onDeleteSet,
   onUpdateSet,
   onSelectSet,
+  nowMs = Date.now(),
 }: ExerciseCardLoggerProps) {
 
   // Bottom sheet state for exercise-level overflow (in group)
   const [showExerciseOverflowSheet, setShowExerciseOverflowSheet] = useState(false);
+  // Bottom sheet state for exercise history
+  const [showHistorySheet, setShowHistorySheet] = useState(false);
+  
+  // Get comparison flag (only compute if we have lastSessionData and no sets logged yet)
+  const comparisonFlag = exercise.sets.length === 0 && lastSessionData && allWorkouts.length > 0
+    ? getComparisonFlag(exercise.name, allWorkouts)
+    : null;
+  
+  // Get last 4 sessions for bottom sheet
+  const historySessions = allWorkouts.length > 0
+    ? getRecentSessionsForExercise(exercise.name, allWorkouts, 4)
+    : [];
 
   return (
     <>
@@ -86,6 +106,8 @@ export function ExerciseCardLogger({
           sets={exercise.sets}
           onSelectSet={onSelectSet ? (setId, setIndex) => onSelectSet(exercise.id, setId, setIndex) : undefined}
           exerciseId={exercise.id}
+          lastSetAt={exercise.lastSetAt}
+          nowMs={nowMs}
         />
       )}
 
@@ -109,6 +131,9 @@ export function ExerciseCardLogger({
               const displayWeight = convertKgToDisplay(chipWeightKg);
               onInputChange(exercise.id, displayWeight.toString(), chipReps.toString());
             }}
+            onLabelPress={() => setShowHistorySheet(true)}
+            comparisonFlag={comparisonFlag?.show ? comparisonFlag.message : null}
+            showChevron={false}
           />
         );
       })()}
@@ -150,6 +175,19 @@ export function ExerciseCardLogger({
           />
         </CompactBottomSheet>
       )}
+      
+      {/* Exercise history bottom sheet */}
+      <ExerciseHistoryBottomSheet
+        isOpen={showHistorySheet}
+        onClose={() => setShowHistorySheet(false)}
+        exerciseName={exercise.name}
+        sessions={historySessions}
+        onChipPress={(chipWeightKg, chipReps) => {
+          // Chip tap prefills draft inputs and closes sheet
+          const displayWeight = convertKgToDisplay(chipWeightKg);
+          onInputChange(exercise.id, displayWeight.toString(), chipReps.toString());
+        }}
+      />
     </>
   );
 }

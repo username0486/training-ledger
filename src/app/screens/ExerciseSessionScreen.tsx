@@ -2,45 +2,49 @@ import { useState, useEffect } from 'react';
 import { Check, Clock, X } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Button } from '../components/Button';
-import { Set } from '../types';
+import { Set, Workout } from '../types';
 import { formatWeight, convertKgToDisplay, convertDisplayToKg } from '../../utils/weightFormat';
 import { RepsWeightGrid } from '../components/RepsWeightGrid';
 import { LastSessionStats } from '../components/LastSessionStats';
+import { ExerciseHistoryBottomSheet } from '../components/ExerciseHistoryBottomSheet';
 import { formatDuration, getElapsedSec } from '../utils/duration';
+import { getElapsedSince } from '../utils/restTimer';
+import { getSetsInDisplayOrder } from '../utils/setOrdering';
+import { getRecentSessionsForExercise } from '../utils/storage';
+import { getComparisonFlag } from '../utils/exerciseComparison';
 
 interface ExerciseSessionScreenProps {
   exerciseName: string;
   sets: Set[];
   lastSession?: { sets: Array<{ weight: number; reps: number }>; date: number } | null;
+  allWorkouts?: Workout[]; // All workouts for history and comparison
   startedAt?: number;
   endedAt?: number;
   onEnsureStartedAt?: () => void; // ensures startedAt is set + persisted (idempotent)
-  initialRestTimerStart?: number | null;
-  onBack: (restTimerStart: number | null) => void;
+  lastSetAt?: number; // timestamp of last set (for rest timer)
+  onBack: () => void;
   onAddSet: (weight: number, reps: number, restDuration?: number) => void;
   onDeleteSet: (setId: string) => void;
   onFinish: () => void;
-  onRestTimerChange?: (restTimerStart: number | null) => void;
 }
 
 export function ExerciseSessionScreen({
   exerciseName,
   sets,
   lastSession,
+  allWorkouts = [],
   startedAt,
   endedAt,
   onEnsureStartedAt,
-  initialRestTimerStart,
+  lastSetAt,
   onBack,
   onAddSet,
   onDeleteSet,
   onFinish,
-  onRestTimerChange,
 }: ExerciseSessionScreenProps) {
   const [weight, setWeight] = useState('');
   const [reps, setReps] = useState('');
-  const [restTimerStart, setRestTimerStart] = useState<number | null>(initialRestTimerStart || null);
-  const [restTimerElapsed, setRestTimerElapsed] = useState(0);
+  const [showHistorySheet, setShowHistorySheet] = useState(false);
 
   // Ensure session startedAt is persisted as soon as this screen is active (idempotent)
   useEffect(() => {
@@ -60,24 +64,16 @@ export function ExerciseSessionScreen({
   const elapsedSec = startedAt ? getElapsedSec(startedAt, endedAt) : 0;
   const elapsedLabel = formatDuration(elapsedSec);
 
-  // Rest timer effect
+  // Rest timer: compute from lastSetAt timestamp (not stored state)
+  // Lightweight tick to trigger re-render for display updates
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    if (restTimerStart === null) return;
-
     const interval = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - restTimerStart) / 1000);
-      setRestTimerElapsed(elapsed);
+      setTick(prev => prev + 1);
     }, 1000);
-
     return () => clearInterval(interval);
-  }, [restTimerStart]);
+  }, []);
 
-  // Emit rest timer changes to parent
-  useEffect(() => {
-    if (onRestTimerChange) {
-      onRestTimerChange(restTimerStart);
-    }
-  }, [restTimerStart, onRestTimerChange]);
 
   // Prefill inputs with last set's values ONLY after a set is added (not on initial load)
   // Weight is stored in kg (canonical), convert to display unit for input
@@ -103,19 +99,23 @@ export function ExerciseSessionScreen({
     // Convert from display unit to kg (canonical) for storage
     const wKg = convertDisplayToKg(wDisplay);
     
-    onAddSet(wKg, r, restTimerElapsed);
+    // Get current rest elapsed before logging set (for restDuration)
+    const currentRestElapsed = lastSetAt 
+      ? getElapsedSince(lastSetAt)
+      : (sets.length > 0 ? getElapsedSince(sets[sets.length - 1].timestamp) : 0);
+    onAddSet(wKg, r, currentRestElapsed > 0 ? currentRestElapsed : undefined);
+    
     // Prefill with the set we just added (for next set) - keep in display unit
     setWeight(wDisplay.toString());
     setReps(r.toString());
-    // Start rest timer
-    setRestTimerStart(Date.now());
+    // lastSetAt will be set by the parent when the set is added
   };
 
   return (
     <div className="h-screen flex flex-col bg-panel">
       <TopBar
-        title={exerciseName}
-        onBack={() => onBack(restTimerStart)}
+        title={undefined}
+        onBack={onBack}
         rightAction={
           startedAt ? (
             <div className="text-sm tabular-nums text-text-muted">
@@ -133,29 +133,6 @@ export function ExerciseSessionScreen({
               <h2 className="text-xl font-semibold">{exerciseName}</h2>
             </div>
 
-            {/* Rest Timer or Last Session Info */}
-            {restTimerStart !== null && sets.length > 0 ? (
-              <div className="flex items-center justify-between px-3 py-2 bg-surface/50 rounded-lg border border-border-subtle">
-                <div className="flex items-center gap-3">
-                  <Clock className="w-4 h-4 text-text-muted" />
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-text-muted">Since last set</p>
-                    <p className="text-lg tabular-nums">
-                      {Math.floor(restTimerElapsed / 60)}:{(restTimerElapsed % 60).toString().padStart(2, '0')}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => {
-                    setRestTimerStart(null);
-                    setRestTimerElapsed(0);
-                  }}
-                  className="p-1.5 text-text-muted hover:text-text-primary transition-colors rounded-lg hover:bg-surface"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            ) : null}
 
             {/* Set logging inputs - at top for priority */}
             <div className="space-y-3">
@@ -198,6 +175,9 @@ export function ExerciseSessionScreen({
                   date: lastSession.date,
                 };
                 
+                // Get comparison flag
+                const comparisonFlag = getComparisonFlag(exerciseName, allWorkouts);
+                
                 return (
                   <LastSessionStats
                     lastSessionData={lastSessionCopy}
@@ -209,40 +189,64 @@ export function ExerciseSessionScreen({
                       setWeight(displayWeight.toString());
                       setReps(chipReps.toString());
                     }}
+                    onLabelPress={() => setShowHistorySheet(true)}
+                    comparisonFlag={comparisonFlag.show ? comparisonFlag.message : null}
+                    showChevron={false}
                   />
                 );
               })()}
             </div>
 
             {/* Sets list - below inputs (only shown when sets exist) */}
-            {sets.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-xs uppercase tracking-wide text-text-muted">Sets</p>
-                {sets.map((set, index) => (
-                  <div
-                    key={set.id}
-                    className="flex items-center justify-between p-3 bg-panel rounded-lg border border-border-subtle"
-                  >
-                    <div className="flex items-center gap-4">
-                      <span className="text-text-muted w-8">#{index + 1}</span>
-                      <span className="text-text-primary">
-                        {formatWeight(set.weight)} × {set.reps} reps
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => onDeleteSet(set.id)}
-                      className="p-1.5 text-text-muted hover:text-danger transition-colors rounded-lg hover:bg-surface"
-                      title="Delete set"
+            {sets.length > 0 && (() => {
+              // Sort sets in chronological order (oldest → newest)
+              const sortedSets = getSetsInDisplayOrder(sets);
+              return (
+                <>
+                  <div className="space-y-2">
+                    <p className="text-xs uppercase tracking-wide text-text-muted">Sets</p>
+                    {sortedSets.map((set, index) => (
+                    <div
+                      key={set.id}
+                      className="flex items-center justify-between p-3 bg-panel rounded-lg border border-border-subtle"
                     >
-                      <X className="w-4 h-4" />
-                    </button>
+                      <div className="flex items-center gap-4">
+                        <span className="text-text-muted w-8">#{index + 1}</span>
+                        <span className="text-text-primary">
+                          {formatWeight(set.weight)} × {set.reps} reps
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => onDeleteSet(set.id)}
+                        className="p-1.5 text-text-muted hover:text-danger transition-colors rounded-lg hover:bg-surface"
+                        title="Delete set"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            )}
+                </>
+              );
+            })()}
           </div>
         </div>
       </div>
+      
+      {/* Exercise History Bottom Sheet */}
+      <ExerciseHistoryBottomSheet
+        isOpen={showHistorySheet}
+        onClose={() => setShowHistorySheet(false)}
+        exerciseName={exerciseName}
+        sessions={getRecentSessionsForExercise(exerciseName, allWorkouts, 4)}
+        onChipPress={(chipWeightKg, chipReps) => {
+          // Chip tap prefills draft inputs and closes sheet
+          const displayWeight = convertKgToDisplay(chipWeightKg);
+          setWeight(displayWeight.toString());
+          setReps(chipReps.toString());
+          setShowHistorySheet(false);
+        }}
+      />
     </div>
   );
 }

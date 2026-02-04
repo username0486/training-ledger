@@ -1,23 +1,26 @@
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Check, Clock, X, MoreHorizontal, Link2 } from 'lucide-react';
-import { Exercise, Set } from '../types';
+import { Exercise, Set, Workout } from '../types';
 import { ExerciseCardLogger } from './ExerciseCardLogger';
 import { Button } from './Button';
 import { formatWeight, convertKgToDisplay, convertDisplayToKg } from '../../utils/weightFormat';
 import { getGroupExercises } from '../utils/exerciseGrouping';
 import { CompactBottomSheet } from './CompactBottomSheet';
 import { OverflowActionGroup } from './OverflowActionGroup';
+import { formatRestTime, getGroupLastSetAt } from '../utils/restTimer';
 
 interface SupersetBlockProps {
   groupId: string;
   exercises: Exercise[];
   lastSessionData: Map<string, { sets: Array<{ weight: number; reps: number }>; date: number }>;
+  allWorkouts?: Workout[]; // All workouts for history and comparison
   onAddSet: (exercises: Array<{ exerciseId: string; weight: number; reps: number }>, supersetSetId: string) => void;
   onCompleteGroup: (exerciseIds: string[]) => void;
   onDeleteSet?: (exerciseId: string, setId: string) => void;
-  restTimerStart?: number | null;
-  restTimerElapsed?: number;
-  onRestTimerChange?: (restTimerStart: number | null) => void;
+  restOwnerId?: string | null; // groupId if this group owns the rest timer
+  restElapsed?: number; // computed elapsed time in seconds
+  onRestTimerChange?: (ownerId: string | null) => void;
+  nowMs?: number; // current timestamp for consistent elapsed time computation
   // Group management props
   onAddToGroup?: () => void;
   // Exercise-level actions (passed to ExerciseCardLogger)
@@ -32,12 +35,14 @@ export function SupersetBlock({
   groupId,
   exercises,
   lastSessionData,
+  allWorkouts = [],
   onAddSet,
   onCompleteGroup,
   onDeleteSet,
-  restTimerStart,
-  restTimerElapsed = 0,
+  restOwnerId,
+  restElapsed = 0,
   onRestTimerChange,
+  nowMs = Date.now(),
   onAddToGroup,
   onRemoveFromGroup,
   onSwapExerciseInGroup,
@@ -144,19 +149,24 @@ export function SupersetBlock({
       });
       setInputs(updatedInputs);
       
-      // Start rest timer
+      // Update rest context: this group now owns the rest timer
+      // lastSetAt will be set by addSupersetSetToWorkout in App.tsx
       if (onRestTimerChange) {
-        onRestTimerChange(Date.now());
+        onRestTimerChange(groupId);
       }
     }
   };
 
   const handleComplete = () => {
+    // Clear rest context if this group owns it
+    if (restOwnerId === groupId && onRestTimerChange) {
+      onRestTimerChange(null);
+    }
     onCompleteGroup(groupMembers.map(ex => ex.id));
   };
 
-  // Rest timer display
-  const showRestTimer = restTimerStart !== null && restTimerStart !== undefined && hasAnySets;
+  // Rest timer display - show if this group owns the rest context, is not completed, and has sets
+  const showRestTimer = restOwnerId === groupId && !allComplete && hasAnySets;
 
   return (
     <div className="bg-surface rounded-2xl border border-border-subtle p-6 space-y-4">
@@ -193,6 +203,7 @@ export function SupersetBlock({
               <ExerciseCardLogger
                 exercise={exercise}
                 lastSessionData={lastSessionData.get(exercise.name) || null}
+                allWorkouts={allWorkouts}
                 onInputChange={handleInputChange}
                 weight={inputs[exercise.id]?.weight || ''}
                 reps={inputs[exercise.id]?.reps || ''}
@@ -204,6 +215,7 @@ export function SupersetBlock({
                 onDeleteSet={onDeleteSet}
                 onUpdateSet={onUpdateSet}
                 onSelectSet={onSelectSet}
+                nowMs={nowMs}
               />
             </div>
           </div>
@@ -247,7 +259,7 @@ export function SupersetBlock({
             <div>
               <p className="text-xs uppercase tracking-wide text-text-muted">Since last set</p>
               <p className="text-lg tabular-nums">
-                {Math.floor(restTimerElapsed / 60)}:{(restTimerElapsed % 60).toString().padStart(2, '0')}
+                {formatRestTime(restElapsed)}
               </p>
             </div>
           </div>

@@ -269,7 +269,12 @@ export function ExerciseSearchBottomSheet({
             paddingBottom: keyboardHeight > 0 ? `${keyboardHeight}px` : undefined,
           }}
         >
-          <div className="p-6 pb-6 flex flex-col h-full">
+          <div 
+            className="p-6 flex flex-col h-full"
+            style={{
+              paddingBottom: `max(calc(5rem + env(safe-area-inset-bottom, 0px)), calc(5rem + env(safe-area-inset-bottom, 0px)))`,
+            }}
+          >
             {children}
           </div>
         </div>

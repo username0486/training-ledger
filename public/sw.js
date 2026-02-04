@@ -20,7 +20,7 @@ self.addEventListener('install', (event) => {
     caches.open(CACHE_NAME).then((cache) => {
       console.log('[Service Worker] Caching app shell');
       return cache.addAll(PRECACHE_ASSETS).catch((error) => {
-        console.error('[Service Worker] Cache install failed:', error);
+      console.error('[Service Worker] Cache install failed:', error);
         // Don't fail installation if some assets fail to cache
       });
     })
@@ -36,13 +36,13 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) => {
       // Delete all caches that don't match current version
       const deletePromises = cacheNames
-        .filter((cacheName) => {
+          .filter((cacheName) => {
           // Keep only caches that match current version
-          return cacheName !== CACHE_NAME && cacheName !== RUNTIME_CACHE;
-        })
-        .map((cacheName) => {
-          console.log('[Service Worker] Deleting old cache:', cacheName);
-          return caches.delete(cacheName);
+            return cacheName !== CACHE_NAME && cacheName !== RUNTIME_CACHE;
+          })
+          .map((cacheName) => {
+            console.log('[Service Worker] Deleting old cache:', cacheName);
+            return caches.delete(cacheName);
         });
       
       return Promise.all(deletePromises);
@@ -77,7 +77,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(fetch(event.request));
     return;
   }
-
+  
   // Special handling for systemExercises.json - never return HTML fallback
   if (requestUrl === '/exercises/systemExercises.json' || requestUrl === '/systemExercises.json') {
     event.respondWith(
@@ -133,14 +133,14 @@ self.addEventListener('fetch', (event) => {
   // These have content hashes in their filenames, so they're versioned
   if (requestUrl.startsWith('/assets/') || 
       requestUrl.match(/\.(js|css|woff2?|png|jpg|jpeg|svg|ico)$/i)) {
-    event.respondWith(
-      caches.match(event.request).then((cachedResponse) => {
-        if (cachedResponse) {
-          return cachedResponse;
-        }
-        
+  event.respondWith(
+    caches.match(event.request).then((cachedResponse) => {
+      if (cachedResponse) {
+        return cachedResponse;
+      }
+
         // Fetch from network and cache
-        return fetch(event.request).then((response) => {
+      return fetch(event.request).then((response) => {
           if (response.ok) {
             const responseToCache = response.clone();
             caches.open(RUNTIME_CACHE).then((cache) => {
@@ -152,7 +152,7 @@ self.addEventListener('fetch', (event) => {
       })
     );
     return;
-  }
+        }
 
   // Default: Network-first for other resources
   event.respondWith(
@@ -160,16 +160,16 @@ self.addEventListener('fetch', (event) => {
       .then((response) => {
         // Cache successful responses
         if (response.ok && response.type === 'basic') {
-          const responseToCache = response.clone();
-          caches.open(RUNTIME_CACHE).then((cache) => {
-            cache.put(event.request, responseToCache);
-          });
+        const responseToCache = response.clone();
+        caches.open(RUNTIME_CACHE).then((cache) => {
+          cache.put(event.request, responseToCache);
+        });
         }
         return response;
       })
       .catch(() => {
         // Fallback to cache
         return caches.match(event.request);
-      })
+    })
   );
 });

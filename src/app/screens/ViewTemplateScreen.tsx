@@ -391,7 +391,12 @@ export function ViewTemplateScreen({
       </div>
 
       {/* Fixed Record workout button */}
-      <div className="fixed bottom-0 left-0 right-0 bg-panel border-t border-border-subtle p-5 z-10">
+      <div 
+        className="fixed bottom-0 left-0 right-0 bg-panel border-t border-border-subtle px-5 pt-5 z-10"
+        style={{
+          paddingBottom: `max(calc(1.25rem + env(safe-area-inset-bottom, 0px)), env(safe-area-inset-bottom, 0px))`,
+        }}
+      >
         <div className="max-w-2xl mx-auto space-y-2">
           {durationEstimate && (
             <p className="text-sm text-text-muted text-center">

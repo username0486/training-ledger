@@ -6,6 +6,7 @@ import { Workout, AdHocLoggingSession } from '../types';
 import { IncompleteExerciseSession } from '../types';
 import { WorkoutTemplate } from '../types/templates';
 import { formatTimeAgo } from '../utils/storage';
+import { formatElapsed, getElapsedSince } from '../utils/restTimer';
 import appIcon from '../../images/icon-192x192.png';
 import { seedAllDemoData, resetAndSeed, isDemoDataSeeded } from '../../utils/devSeed';
 
@@ -75,23 +76,40 @@ export function HomeScreen({
     }
   };
 
-  // Timer state for resume card
-  const [restTimerElapsed, setRestTimerElapsed] = useState(0);
-
-  // Update timer every second if there's a running timer
+  // Session-level tick for consistent elapsed time computation
+  const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    if (!incompleteExerciseSession?.restTimerStart) {
-      setRestTimerElapsed(0);
-      return;
-    }
-
     const interval = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - incompleteExerciseSession.restTimerStart!) / 1000);
-      setRestTimerElapsed(elapsed);
+      setNowMs(Date.now());
     }, 1000);
-
     return () => clearInterval(interval);
-  }, [incompleteExerciseSession?.restTimerStart]);
+  }, []);
+
+  // Compute elapsed time from session-level lastSetAt
+  const getSessionElapsed = (session: Workout | IncompleteExerciseSession | AdHocLoggingSession | null): number | null => {
+    if (!session || !session.lastSetAt) return null;
+    return getElapsedSince(session.lastSetAt, nowMs);
+  };
+
+  // Get status text for in-progress session cards
+  // Shows "Since last set: X" if lastSetAt exists, otherwise "Started X ago" using startTime
+  const getSessionStatusText = (session: Workout | IncompleteExerciseSession | AdHocLoggingSession | null): string => {
+    if (!session) return 'Not started';
+    
+    // If lastSetAt exists, show time since last set
+    if (session.lastSetAt) {
+      const elapsed = getElapsedSince(session.lastSetAt, nowMs);
+      return `Since last set: ${formatElapsed(elapsed)}`;
+    }
+    
+    // If no sets logged yet, show time since session started
+    if (session.startTime) {
+      return `Started ${formatTimeAgo(session.startTime)}`;
+    }
+    
+    // Fallback (shouldn't happen for in-progress sessions)
+    return 'Not started';
+  };
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -140,7 +158,7 @@ export function HomeScreen({
                         {unfinishedWorkout.exercises.length} {unfinishedWorkout.exercises.length === 1 ? 'exercise' : 'exercises'}
                       </p>
                       <p className="text-text-muted">
-                        Started {formatTimeAgo(unfinishedWorkout.startTime)}
+                        {getSessionStatusText(unfinishedWorkout)}
                       </p>
                     </div>
                   </div>
@@ -182,11 +200,9 @@ export function HomeScreen({
                       <p className="text-text-muted">
                         {incompleteExerciseSession.sets.length} {incompleteExerciseSession.sets.length === 1 ? 'set' : 'sets'} logged
                       </p>
-                      {restTimerElapsed > 0 && (
-                        <p className="text-text-muted/60 tabular-nums text-sm">
-                          {Math.floor(restTimerElapsed / 60)}:{(restTimerElapsed % 60).toString().padStart(2, '0')} since last set
-                        </p>
-                      )}
+                      <p className="text-text-muted">
+                        {getSessionStatusText(incompleteExerciseSession)}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -228,7 +244,7 @@ export function HomeScreen({
                         {adHocSession.exercises.length} {adHocSession.exercises.length === 1 ? 'exercise' : 'exercises'}
                       </p>
                       <p className="text-text-muted">
-                        Started {formatTimeAgo(adHocSession.startTime)}
+                        {getSessionStatusText(adHocSession)}
                       </p>
                     </div>
                   </div>
