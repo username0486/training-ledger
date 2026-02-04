@@ -5,7 +5,7 @@ This checklist covers the steps required to build and deploy a production-ready 
 ## Pre-Release Configuration
 
 ### ✅ Version & Build Number
-- [x] Version updated to `1.0.0` in `package.json`
+- [x] Version updated to `0.3.0` in `package.json`
 - [ ] Build number/version verified in built artifacts
 - [ ] Version displayed correctly in app (if About screen exists)
 

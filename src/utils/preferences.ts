@@ -15,7 +15,7 @@ interface Preferences {
 
 const DEFAULT_PREFERENCES: Preferences = {
   unitSystem: 'metric',
-  appearance: 'light',
+  appearance: 'dark',
 };
 
 /**

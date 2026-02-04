@@ -8,6 +8,47 @@
       <meta name="description" content="A focused workout log that handles weights, reps, and sessions so you can concentrate on training." />
       <link rel="manifest" href="/manifest.json" />
       <title>Training Ledger</title>
+      <script>
+        // Apply theme before first paint to avoid flicker
+        (function() {
+          try {
+            // Check for saved theme preference
+            const prefs = localStorage.getItem('training-ledger-preferences');
+            let theme = 'dark'; // Default to dark
+            
+            if (prefs) {
+              try {
+                const parsed = JSON.parse(prefs);
+                if (parsed.appearance === 'light' || parsed.appearance === 'dark') {
+                  theme = parsed.appearance;
+                }
+              } catch (e) {
+                // Fallback to old localStorage key
+                const oldTheme = localStorage.getItem('workout-app-theme');
+                if (oldTheme === 'light' || oldTheme === 'dark') {
+                  theme = oldTheme;
+                }
+              }
+            } else {
+              // Check old localStorage key for backward compatibility
+              const oldTheme = localStorage.getItem('workout-app-theme');
+              if (oldTheme === 'light' || oldTheme === 'dark') {
+                theme = oldTheme;
+              }
+            }
+            
+            // Apply theme class immediately
+            if (theme === 'light') {
+              document.documentElement.classList.add('light');
+            } else {
+              document.documentElement.classList.remove('light');
+            }
+          } catch (e) {
+            // If anything fails, default to dark (no class = dark)
+            document.documentElement.classList.remove('light');
+          }
+        })();
+      </script>
     </head>
 
     <body>

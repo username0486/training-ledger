@@ -3,6 +3,7 @@ import { TopBar } from '../components/TopBar';
 import { Card } from '../components/Card';
 import { Workout } from '../types';
 import { formatDate } from '../utils/storage';
+import { getSetsInDisplayOrder } from '../utils/setOrdering';
 import { formatWeight } from '../../utils/weightFormat';
 
 interface ExerciseHistoryScreenProps {
@@ -126,7 +127,9 @@ export function ExerciseHistoryScreen({
 
                         {/* Sets */}
                         <div className="space-y-1.5">
-                          {perf.sets.map((set, setIndex) => (
+                          {(() => {
+                            const sortedSets = getSetsInDisplayOrder(perf.sets);
+                            return sortedSets.map((set, setIndex) => (
                             <div
                               key={set.id}
                               className="flex items-center justify-between p-2.5 bg-surface rounded-lg"
@@ -146,7 +149,8 @@ export function ExerciseHistoryScreen({
                                 )}
                               </div>
                             </div>
-                          ))}
+                            ));
+                          })()}
                         </div>
 
                         {/* Stats */}

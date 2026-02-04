@@ -9,6 +9,7 @@ import { WorkoutSummaryScreen } from './screens/WorkoutSummaryScreen';
 import { ExerciseHistoryScreen } from './screens/ExerciseHistoryScreen';
 import { HistoryScreen } from './screens/HistoryScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
+import { BackupsAndDataScreen } from './screens/BackupsAndDataScreen';
 import { StartLoggingScreen } from './screens/StartLoggingScreen';
 import { Banner } from './components/Banner';
 import { Modal } from './components/Modal';
@@ -43,6 +44,7 @@ type AppScreen =
   | { type: 'exercise-history'; exerciseName: string; previousScreen?: AppScreen }
   | { type: 'history'; searchQuery?: string; scrollPosition?: number; restoreKey?: number }
   | { type: 'settings'; previousScreen?: AppScreen }
+  | { type: 'backups-and-data'; previousScreen?: AppScreen }
   | { type: 'start-logging' }
   | { type: 'ad-hoc-session'; sessionId: string };
 
@@ -77,7 +79,6 @@ export default function App() {
   const [showLogExercise, setShowLogExercise] = useState(false);
   const [exerciseName, setExerciseName] = useState('');
   const [exerciseSessionSets, setExerciseSessionSets] = useState<any[]>([]);
-  const [exerciseRestTimerStart, setExerciseRestTimerStart] = useState<number | null>(null);
   const [showExerciseComplete, setShowExerciseComplete] = useState(false);
   const [showFinishConfirm, setShowFinishConfirm] = useState(false);
   const [finishWorkoutId, setFinishWorkoutId] = useState<string | null>(null);
@@ -90,7 +91,7 @@ export default function App() {
   };
   
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    // Load from preferences first, fallback to old localStorage key, then system preference
+    // Load from preferences first, fallback to old localStorage key, then default to dark
     const prefs = loadPreferences();
     if (prefs.appearance) {
       return prefs.appearance;
@@ -99,10 +100,7 @@ export default function App() {
     if (savedTheme === 'light' || savedTheme === 'dark') {
       return savedTheme;
     }
-    // Check system preference
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
-      return 'light';
-    }
+    // Default to dark mode for first-time users
     return 'dark';
   });
 
@@ -481,7 +479,6 @@ export default function App() {
       sets: [],
       startTime: startedAt,
       startedAt,
-      restTimerStart: null,
     });
     setScreen({ type: 'exercise-session', exerciseName: name, previousScreen });
     setShowLogExercise(false);
@@ -653,8 +650,10 @@ export default function App() {
   };
 
   const addSetToExercise = (workoutId: string, exerciseId: string, weight: number, reps: number, restDuration?: number) => {
+    const now = Date.now();
     setWorkouts(workouts.map(w => {
       if (w.id === workoutId) {
+        const exercise = w.exercises.find(ex => ex.id === exerciseId);
         return {
           ...w,
           exercises: w.exercises.map(ex => {
@@ -664,18 +663,23 @@ export default function App() {
               return {
                 ...ex,
                 sets: [...ex.sets, {
-                  id: Date.now().toString(),
+                  id: now.toString(),
                   weight,
                   reps,
-                  timestamp: Date.now(),
+                  timestamp: now,
                   restDuration,
                 }],
                 // Reactivate exercise if it was previously complete
                 isComplete: wasComplete ? false : ex.isComplete,
+                // Persist timestamp of last set for rest timer
+                lastSetAt: now,
               };
             }
             return ex;
           }),
+          // Update session-level lastSetAt and lastSetOwnerId
+          lastSetAt: now,
+          lastSetOwnerId: exercise?.groupId || exerciseId,
         };
       }
       return w;
@@ -685,17 +689,44 @@ export default function App() {
   const deleteSetFromExercise = (workoutId: string, exerciseId: string, setId: string) => {
     setWorkouts(workouts.map(w => {
       if (w.id === workoutId) {
-        return {
+        const updatedWorkout = {
           ...w,
           exercises: w.exercises.map(ex => {
             if (ex.id === exerciseId) {
+              const updatedSets = ex.sets.filter(s => s.id !== setId);
+              // Update lastSetAt: use most recent set timestamp if sets remain, otherwise clear
+              const newLastSetAt = updatedSets.length > 0
+                ? Math.max(...updatedSets.map(s => s.timestamp))
+                : undefined;
               return {
                 ...ex,
-                sets: ex.sets.filter(s => s.id !== setId),
+                sets: updatedSets,
+                lastSetAt: newLastSetAt,
               };
             }
             return ex;
           }),
+        };
+        // Recalculate session-level lastSetAt from all exercises
+        const allSets = updatedWorkout.exercises.flatMap(ex => ex.sets);
+        const sessionLastSetAt = allSets.length > 0
+          ? Math.max(...allSets.map(s => s.timestamp))
+          : null;
+        // Find the owner of the most recent set
+        let sessionLastSetOwnerId: string | null = null;
+        if (sessionLastSetAt) {
+          for (const ex of updatedWorkout.exercises) {
+            const hasMostRecent = ex.sets.some(s => s.timestamp === sessionLastSetAt);
+            if (hasMostRecent) {
+              sessionLastSetOwnerId = ex.groupId || ex.id;
+              break;
+            }
+          }
+        }
+        return {
+          ...updatedWorkout,
+          lastSetAt: sessionLastSetAt,
+          lastSetOwnerId: sessionLastSetOwnerId,
         };
       }
       return w;
@@ -732,8 +763,12 @@ export default function App() {
   };
 
   const addSupersetSetToWorkout = (workoutId: string, exercises: Array<{ exerciseId: string; weight: number; reps: number }>, supersetSetId: string) => {
+    const now = Date.now();
     setWorkouts(workouts.map(w => {
       if (w.id === workoutId) {
+        // Find the groupId from the first exercise in the superset
+        const firstExercise = w.exercises.find(ex => exercises.some(e => e.exerciseId === ex.id));
+        const groupId = firstExercise?.groupId || null;
         return {
           ...w,
           exercises: w.exercises.map(ex => {
@@ -744,18 +779,23 @@ export default function App() {
               return {
                 ...ex,
                 sets: [...ex.sets, {
-                  id: Date.now().toString() + '-' + ex.id,
+                  id: now.toString() + '-' + ex.id,
                   weight: exerciseData.weight,
                   reps: exerciseData.reps,
-                  timestamp: Date.now(),
+                  timestamp: now,
                   supersetSetId,
                 }],
                 // Reactivate exercise if it was previously complete
                 isComplete: wasComplete ? false : ex.isComplete,
+                // Persist timestamp of last set for rest timer (all exercises in superset get same timestamp)
+                lastSetAt: now,
               };
             }
             return ex;
           }),
+          // Update session-level lastSetAt and lastSetOwnerId (use groupId for supersets)
+          lastSetAt: now,
+          lastSetOwnerId: groupId,
         };
       }
       return w;
@@ -1177,23 +1217,28 @@ export default function App() {
   };
 
   // Handle exercise session back - save as incomplete if sets exist
-  const handleExerciseSessionBack = (restTimerStart: number | null) => {
+  const handleExerciseSessionBack = () => {
     if (exerciseSessionSets.length > 0 && screen.type === 'exercise-session') {
-      // Save as incomplete with timer state
+      // Save as incomplete with lastSetAt timestamp
       const startedAt = incompleteExerciseSession?.startedAt || incompleteExerciseSession?.startTime || Date.now();
+      // Compute lastSetAt from the most recent set
+      const lastSetAt = exerciseSessionSets.length > 0
+        ? Math.max(...exerciseSessionSets.map(s => s.timestamp))
+        : undefined;
+      
       setIncompleteExerciseSession({
         exerciseName: screen.exerciseName,
         sets: exerciseSessionSets,
         startTime: startedAt,
         startedAt,
-        restTimerStart: restTimerStart,
+        lastSetAt,
+        lastSetOwnerId: lastSetAt ? screen.exerciseName : null,
       });
     } else {
       // Clear incomplete if no sets
       setIncompleteExerciseSession(null);
     }
     setExerciseSessionSets([]);
-    setExerciseRestTimerStart(null);
     
     // Return to previous screen if available (e.g., start-logging), otherwise home
     if (screen.type === 'exercise-session' && screen.previousScreen) {
@@ -1572,6 +1617,7 @@ export default function App() {
               exerciseName={screen.exerciseName}
               sets={exerciseSessionSets}
               lastSession={lastSession}
+              allWorkouts={workouts}
               startedAt={incompleteExerciseSession?.startedAt || incompleteExerciseSession?.startTime}
               endedAt={incompleteExerciseSession?.endedAt || incompleteExerciseSession?.endTime}
               onEnsureStartedAt={() => {
@@ -1584,28 +1630,49 @@ export default function App() {
                       sets: exerciseSessionSets,
                       startTime: startedAt,
                       startedAt,
-                      restTimerStart: incompleteExerciseSession?.restTimerStart || null,
+                      lastSetAt: incompleteExerciseSession?.lastSetAt,
                     };
                   }
                   return { ...prev, startTime: prev.startTime || startedAt, startedAt };
                 });
               }}
-              initialRestTimerStart={incompleteExerciseSession?.restTimerStart || null}
-              onBack={(restTimerStart) => handleExerciseSessionBack(restTimerStart)}
+              lastSetAt={incompleteExerciseSession?.lastSetAt}
+              onBack={handleExerciseSessionBack}
               onAddSet={(weight, reps, restDuration) => {
+                const now = Date.now();
                 setExerciseSessionSets([...exerciseSessionSets, {
-                  id: Date.now().toString(),
+                  id: now.toString(),
                   weight,
                   reps,
-                  timestamp: Date.now(),
+                  timestamp: now,
                   restDuration,
                 }]);
+                // Update lastSetAt and lastSetOwnerId in incomplete session
+                if (incompleteExerciseSession) {
+                  setIncompleteExerciseSession({
+                    ...incompleteExerciseSession,
+                    lastSetAt: now,
+                    lastSetOwnerId: incompleteExerciseSession.exerciseName, // For single-exercise sessions, use exercise name as owner
+                  });
+                }
               }}
               onDeleteSet={(setId) => {
-                setExerciseSessionSets(exerciseSessionSets.filter(s => s.id !== setId));
+                const updatedSets = exerciseSessionSets.filter(s => s.id !== setId);
+                setExerciseSessionSets(updatedSets);
+                // Update lastSetAt if sets remain, otherwise clear it
+                if (incompleteExerciseSession) {
+                  const newLastSetAt = updatedSets.length > 0
+                    ? Math.max(...updatedSets.map(s => s.timestamp))
+                    : undefined;
+                  setIncompleteExerciseSession({
+                    ...incompleteExerciseSession,
+                    sets: updatedSets,
+                    lastSetAt: newLastSetAt,
+                    lastSetOwnerId: newLastSetAt ? incompleteExerciseSession.exerciseName : null,
+                  });
+                }
               }}
               onFinish={() => handleExerciseComplete()}
-              onRestTimerChange={(restTimerStart) => setExerciseRestTimerStart(restTimerStart)}
             />
           );
         })()}
@@ -1815,6 +1882,26 @@ export default function App() {
               setAppearance(newTheme);
             }}
             onUnitChange={handleUnitChange}
+            onBack={() => {
+              if (screen.previousScreen) {
+                setScreen(screen.previousScreen);
+              } else {
+                setScreen({ type: 'home' });
+              }
+            }}
+            onNavigateToBackups={() => setScreen({ type: 'backups-and-data', previousScreen: screen })}
+          />
+        )}
+
+        {screen.type === 'backups-and-data' && (
+          <BackupsAndDataScreen
+            onBack={() => {
+              if (screen.previousScreen) {
+                setScreen(screen.previousScreen);
+              } else {
+                setScreen({ type: 'home' });
+              }
+            }}
             onDataImported={() => {
               // Reload state after import
               const result = loadState();
@@ -1825,12 +1912,12 @@ export default function App() {
                 setAdHocSession(result.state.adHocSession ?? null);
               }
             }}
-            onBack={() => {
-              if (screen.previousScreen) {
-                setScreen(screen.previousScreen);
-              } else {
-                setScreen({ type: 'home' });
-              }
+            onDataDeleted={() => {
+              // Clear all state after deletion
+              setWorkouts([]);
+              setTemplates([]);
+              setIncompleteExerciseSession(null);
+              setAdHocSession(null);
             }}
           />
         )}
@@ -2034,6 +2121,8 @@ export default function App() {
                 setAdHocSession(reclassifiedSession);
               }}
               onAddSet={(exerciseId, weight, reps, restDuration) => {
+                const now = Date.now();
+                const exercise = session.exercises.find(ex => ex.id === exerciseId);
                 const updatedSession: AdHocLoggingSession = {
                   ...session,
                   exercises: session.exercises.map(ex => {
@@ -2043,22 +2132,31 @@ export default function App() {
                       return {
                         ...ex,
                         sets: [...ex.sets, {
-                          id: Date.now().toString(),
+                          id: now.toString(),
                           weight,
                           reps,
-                          timestamp: Date.now(),
+                          timestamp: now,
                           restDuration,
                         }],
                         // Reactivate exercise if it was previously complete
                         isComplete: wasComplete ? false : ex.isComplete,
+                        // Persist timestamp of last set for rest timer
+                        lastSetAt: now,
                       };
                     }
                     return ex;
                   }),
+                  // Update session-level lastSetAt and lastSetOwnerId
+                  lastSetAt: now,
+                  lastSetOwnerId: exercise?.groupId || exerciseId,
                 };
                 setAdHocSession(updatedSession);
               }}
               onAddSupersetSet={(exercises, supersetSetId) => {
+                const now = Date.now();
+                // Find the groupId from the first exercise in the superset
+                const firstExercise = session.exercises.find(ex => exercises.some(e => e.exerciseId === ex.id));
+                const groupId = firstExercise?.groupId || null;
                 const updatedSession: AdHocLoggingSession = {
                   ...session,
                   exercises: session.exercises.map(ex => {
@@ -2069,33 +2167,63 @@ export default function App() {
                       return {
                         ...ex,
                         sets: [...ex.sets, {
-                          id: Date.now().toString() + '-' + ex.id,
+                          id: now.toString() + '-' + ex.id,
                           weight: exerciseData.weight,
                           reps: exerciseData.reps,
-                          timestamp: Date.now(),
+                          timestamp: now,
                           supersetSetId,
                         }],
                         // Reactivate exercise if it was previously complete
                         isComplete: wasComplete ? false : ex.isComplete,
+                        // Persist timestamp of last set for rest timer (all exercises in superset get same timestamp)
+                        lastSetAt: now,
                       };
                     }
                     return ex;
                   }),
+                  // Update session-level lastSetAt and lastSetOwnerId (use groupId for supersets)
+                  lastSetAt: now,
+                  lastSetOwnerId: groupId,
                 };
                 setAdHocSession(updatedSession);
               }}
               onDeleteSet={(exerciseId, setId) => {
+                const updatedExercises = session.exercises.map(ex => {
+                  if (ex.id === exerciseId) {
+                    const updatedSets = ex.sets.filter(s => s.id !== setId);
+                    // Update lastSetAt: use most recent set timestamp if sets remain, otherwise clear
+                    const newLastSetAt = updatedSets.length > 0
+                      ? Math.max(...updatedSets.map(s => s.timestamp))
+                      : undefined;
+                    return {
+                      ...ex,
+                      sets: updatedSets,
+                      lastSetAt: newLastSetAt,
+                    };
+                  }
+                  return ex;
+                });
+                // Recalculate session-level lastSetAt from all exercises
+                const allSets = updatedExercises.flatMap(ex => ex.sets);
+                const sessionLastSetAt = allSets.length > 0
+                  ? Math.max(...allSets.map(s => s.timestamp))
+                  : null;
+                // Find the owner of the most recent set
+                let sessionLastSetOwnerId: string | null = null;
+                if (sessionLastSetAt) {
+                  for (const ex of updatedExercises) {
+                    const hasMostRecent = ex.sets.some(s => s.timestamp === sessionLastSetAt);
+                    if (hasMostRecent) {
+                      sessionLastSetOwnerId = ex.groupId || ex.id;
+                      break;
+                    }
+                  }
+                }
                 const updatedSession: AdHocLoggingSession = {
                   ...session,
-                  exercises: session.exercises.map(ex => {
-                    if (ex.id === exerciseId) {
-                      return {
-                        ...ex,
-                        sets: ex.sets.filter(s => s.id !== setId),
-                      };
-                    }
-                    return ex;
-                  }),
+                  exercises: updatedExercises,
+                  lastSetAt: sessionLastSetAt,
+                  lastSetOwnerId: sessionLastSetOwnerId,
                 };
                 setAdHocSession(updatedSession);
               }}
@@ -2300,6 +2428,7 @@ export default function App() {
         screen.type === 'workout-summary' ||
         screen.type === 'exercise-session' ||
         screen.type === 'settings' ||
+        screen.type === 'backups-and-data' ||
         screen.type === 'start-logging' ||
         screen.type === 'ad-hoc-session'
       ) && (
@@ -2311,7 +2440,7 @@ export default function App() {
               <div 
                 className="absolute top-1 bottom-1 left-1 w-[calc(50%-0.25rem)] bg-accent/10 backdrop-blur-sm rounded-full transition-transform duration-200 ease-out border border-accent/20"
                 style={{
-                  transform: (screen.type === 'history' || screen.type === 'workout-summary' || screen.type === 'exercise-history' || screen.type === 'settings') ? 'translateX(100%)' : 'translateX(0)',
+                  transform: (screen.type === 'history' || screen.type === 'workout-summary' || screen.type === 'exercise-history' || screen.type === 'settings' || screen.type === 'backups-and-data') ? 'translateX(100%)' : 'translateX(0)',
                 }}
               />
               
@@ -2320,7 +2449,7 @@ export default function App() {
                 <button
                   onClick={() => setScreen({ type: 'home' })}
                   className={`py-3 px-6 flex items-center justify-center gap-2 transition-colors rounded-full relative z-10 ${
-                    !(screen.type === 'history' || screen.type === 'workout-summary' || screen.type === 'exercise-history' || screen.type === 'settings') ? 'text-accent' : 'text-text-muted'
+                    !(screen.type === 'history' || screen.type === 'workout-summary' || screen.type === 'exercise-history' || screen.type === 'settings' || screen.type === 'backups-and-data') ? 'text-accent' : 'text-text-muted'
                   }`}
                 >
                   <Dumbbell className="w-4 h-4" />
@@ -2329,7 +2458,7 @@ export default function App() {
                 <button
                   onClick={() => setScreen({ type: 'history' })}
                   className={`py-3 px-6 flex items-center justify-center gap-2 transition-colors rounded-full relative z-10 ${
-                    (screen.type === 'history' || screen.type === 'workout-summary' || screen.type === 'exercise-history' || screen.type === 'settings') ? 'text-accent' : 'text-text-muted'
+                    (screen.type === 'history' || screen.type === 'workout-summary' || screen.type === 'exercise-history' || screen.type === 'settings' || screen.type === 'backups-and-data') ? 'text-accent' : 'text-text-muted'
                   }`}
                 >
                   <List className="w-4 h-4" />

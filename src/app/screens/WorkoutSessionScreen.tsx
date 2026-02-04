@@ -30,7 +30,11 @@ import { CompletedSetsPanel } from '../components/CompletedSetsPanel';
 import { RepsWeightGrid } from '../components/RepsWeightGrid';
 import { ManageSetSheet } from '../components/ManageSetSheet';
 import { LastSessionStats } from '../components/LastSessionStats';
+import { ExerciseHistoryBottomSheet } from '../components/ExerciseHistoryBottomSheet';
 import { formatDuration, getElapsedSec } from '../utils/duration';
+import { getElapsedSince, formatRestTime, getGroupLastSetAt, formatElapsed } from '../utils/restTimer';
+import { formatWorkoutTitle } from '../utils/periodOfDay';
+import { getComparisonFlag } from '../utils/exerciseComparison';
 
 interface WorkoutSessionScreenProps {
   workoutName: string;
@@ -130,8 +134,70 @@ export function WorkoutSessionScreen({
   const [touchStartY, setTouchStartY] = useState<number | null>(null);
   const [touchStartIndex, setTouchStartIndex] = useState<number | null>(null);
   const [isDraggingFromHandle, setIsDraggingFromHandle] = useState(false);
-  const [restTimerStart, setRestTimerStart] = useState<number | null>(null);
-  const [restTimerElapsed, setRestTimerElapsed] = useState(0);
+  // Rest context: tracks which exercise/group owns the rest timer
+  // Timer is computed from restStartedAtMs timestamp, not stored state
+  // Initialize from persisted data: find exercise/group with most recent lastSetAt
+  const [restOwnerId, setRestOwnerId] = useState<string | null>(() => {
+    // Find exercise or group with most recent lastSetAt
+    let mostRecentTimestamp = 0;
+    let ownerId: string | null = null;
+    
+    // Group exercises by groupId
+    const groups = new Map<string, Exercise[]>();
+    exercises.forEach(ex => {
+      if (ex.groupId) {
+        if (!groups.has(ex.groupId)) {
+          groups.set(ex.groupId, []);
+        }
+        groups.get(ex.groupId)!.push(ex);
+      }
+    });
+    
+    // Check groups first (they take precedence if multiple exercises share same timestamp)
+    groups.forEach((groupExercises, groupId) => {
+      const groupLastSetAt = getGroupLastSetAt(groupExercises);
+      if (groupLastSetAt && groupLastSetAt > mostRecentTimestamp) {
+        mostRecentTimestamp = groupLastSetAt;
+        ownerId = groupId;
+      }
+    });
+    
+    // Check single exercises (not in groups)
+    exercises.forEach(ex => {
+      if (!ex.groupId && ex.lastSetAt && ex.lastSetAt > mostRecentTimestamp) {
+        mostRecentTimestamp = ex.lastSetAt;
+        ownerId = ex.id;
+      }
+    });
+    
+    return ownerId;
+  }); // exerciseId or groupId
+  
+  // Track when rest timer started (timestamp of most recent set for rest owner)
+  const [restStartedAtMs, setRestStartedAtMs] = useState<number | null>(() => {
+    if (!restOwnerId) return null;
+    
+    // Find the timestamp for the rest owner
+    const groups = new Map<string, Exercise[]>();
+    exercises.forEach(ex => {
+      if (ex.groupId) {
+        if (!groups.has(ex.groupId)) {
+          groups.set(ex.groupId, []);
+        }
+        groups.get(ex.groupId)!.push(ex);
+      }
+    });
+    
+    // Check if rest owner is a group
+    if (groups.has(restOwnerId)) {
+      const groupLastSetAt = getGroupLastSetAt(groups.get(restOwnerId)!);
+      return groupLastSetAt;
+    }
+    
+    // Check if rest owner is a single exercise
+    const exercise = exercises.find(ex => ex.id === restOwnerId);
+    return exercise?.lastSetAt || null;
+  });
   // Bottom sheet state for standalone exercise overflow
   const [showExerciseOverflowSheet, setShowExerciseOverflowSheet] = useState(false);
   const [overflowExerciseId, setOverflowExerciseId] = useState<string | null>(null);
@@ -139,6 +205,9 @@ export function WorkoutSessionScreen({
   const [showManageSetSheet, setShowManageSetSheet] = useState(false);
   const [selectedSetId, setSelectedSetId] = useState<string | null>(null);
   const [selectedSetExerciseId, setSelectedSetExerciseId] = useState<string | null>(null);
+  // History bottom sheet state
+  const [showHistorySheet, setShowHistorySheet] = useState(false);
+  const [historyExerciseName, setHistoryExerciseName] = useState<string | null>(null);
   const [exerciseListTab, setExerciseListTab] = useState<'upcoming' | 'completed'>('upcoming');
   const [animateCompleted, setAnimateCompleted] = useState(false);
   const previousCompletedCountRef = useRef(0);
@@ -335,30 +404,94 @@ export function WorkoutSessionScreen({
     : exercises.filter(ex => !ex.isComplete);
   const upcomingExercises = filterGroupedMembers(allUpcoming);
 
-  // Rest timer logic - keyed to activeItemId, not groupId
-  // Timer ownership belongs ONLY to the currently active item
-  // Clear timer immediately when activeItemId changes
+  // Rest context: determine which exercise/group owns the rest timer
+  // Timer is computed from lastSetAt timestamps, persists across navigation
+  // Only a lightweight tick to trigger re-render for display updates
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    // Clear timer when active item changes
-    setRestTimerStart(null);
-    setRestTimerElapsed(0);
-  }, [activeItemId]);
-
-  // Update timer display only (no navigation/focus changes)
-  useEffect(() => {
-    if (restTimerStart === null) {
-      setRestTimerElapsed(0);
-      return;
-    }
-
+    // Lightweight tick every second to update rest timer display
     const interval = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - restTimerStart) / 1000);
-      setRestTimerElapsed(elapsed);
-      // Timer only updates display - no navigation or focus changes
+      setTick(prev => prev + 1);
     }, 1000);
-
     return () => clearInterval(interval);
-  }, [restTimerStart]);
+  }, []);
+
+  // Compute rest timer elapsed time from restStartedAtMs timestamp
+  const getRestElapsed = (): number => {
+    if (!restStartedAtMs) return 0;
+    return getElapsedSince(restStartedAtMs, timerNow);
+  };
+
+  const restElapsed = getRestElapsed();
+
+  // Sync restOwnerId and restStartedAtMs when exercises change (e.g., when resuming session)
+  // If current restOwnerId no longer has lastSetAt, find the new owner
+  useEffect(() => {
+    if (restOwnerId) {
+      // Check if current owner still has a valid lastSetAt
+      const groupExercises = exercises.filter(ex => ex.groupId === restOwnerId);
+      if (groupExercises.length > 0) {
+        // It's a group
+        const groupLastSetAt = getGroupLastSetAt(groupExercises);
+        if (!groupLastSetAt) {
+          // Group no longer has lastSetAt, clear rest owner
+          setRestOwnerId(null);
+          setRestStartedAtMs(null);
+        } else if (restStartedAtMs !== groupLastSetAt) {
+          // Update restStartedAtMs to match the group's lastSetAt
+          setRestStartedAtMs(groupLastSetAt);
+        }
+      } else {
+        // It's a single exercise
+        const exercise = exercises.find(ex => ex.id === restOwnerId);
+        if (!exercise || !exercise.lastSetAt) {
+          // Exercise no longer has lastSetAt, clear rest owner
+          setRestOwnerId(null);
+          setRestStartedAtMs(null);
+        } else if (restStartedAtMs !== exercise.lastSetAt) {
+          // Update restStartedAtMs to match the exercise's lastSetAt
+          setRestStartedAtMs(exercise.lastSetAt);
+        }
+      }
+    } else {
+      // No current owner, try to find one from persisted data
+      let mostRecentTimestamp = 0;
+      let ownerId: string | null = null;
+      
+      // Group exercises by groupId
+      const groups = new Map<string, Exercise[]>();
+      exercises.forEach(ex => {
+        if (ex.groupId) {
+          if (!groups.has(ex.groupId)) {
+            groups.set(ex.groupId, []);
+          }
+          groups.get(ex.groupId)!.push(ex);
+        }
+      });
+      
+      // Check groups first
+      groups.forEach((groupExercises, groupId) => {
+        const groupLastSetAt = getGroupLastSetAt(groupExercises);
+        if (groupLastSetAt && groupLastSetAt > mostRecentTimestamp) {
+          mostRecentTimestamp = groupLastSetAt;
+          ownerId = groupId;
+        }
+      });
+      
+      // Check single exercises
+      exercises.forEach(ex => {
+        if (!ex.groupId && ex.lastSetAt && ex.lastSetAt > mostRecentTimestamp) {
+          mostRecentTimestamp = ex.lastSetAt;
+          ownerId = ex.id;
+        }
+      });
+      
+      if (ownerId) {
+        setRestOwnerId(ownerId);
+        setRestStartedAtMs(mostRecentTimestamp);
+      }
+    }
+  }, [exercises.length, exercises.map(ex => `${ex.id}:${ex.lastSetAt || 0}:${ex.groupId || ''}`).join('|')]);
 
   const handleAddSet = () => {
     if (!focusExercise) return;
@@ -370,15 +503,24 @@ export function WorkoutSessionScreen({
     // Convert from display unit to kg (canonical) for storage
     const wKg = convertDisplayToKg(wDisplay);
     
-    onAddSet(focusExercise.id, wKg, r, restTimerElapsed > 0 ? restTimerElapsed : undefined);
+    // Get current rest elapsed before logging set (for restDuration)
+    const currentRestElapsed = getRestElapsed();
+    onAddSet(focusExercise.id, wKg, r, currentRestElapsed > 0 ? currentRestElapsed : undefined);
     
     // Prefill with the set we just added (for next set) - keep in display unit
     setWeight(wDisplay.toString());
     setReps(r.toString());
     
-    // Start rest timer after adding set
-    setRestTimerStart(Date.now());
-    setRestTimerElapsed(0);
+    // Update rest context: this exercise/group now owns the rest timer
+    const ownerId = focusExercise.groupId || focusExercise.id;
+    setRestOwnerId(ownerId);
+    // Update restStartedAtMs to the timestamp of the set we just logged
+    setRestStartedAtMs(Date.now());
+    if (focusExercise.groupId) {
+      setRestOwnerId(focusExercise.groupId);
+    } else {
+      setRestOwnerId(focusExercise.id);
+    }
   };
 
   const handleDeleteSet = (setId: string) => {
@@ -388,6 +530,15 @@ export function WorkoutSessionScreen({
 
   const handleCompleteExercise = () => {
     if (!focusExercise) return;
+    
+    // Clear rest context if this exercise/group owns it
+    if (restOwnerId) {
+      if (focusExercise.groupId && restOwnerId === focusExercise.groupId) {
+        setRestOwnerId(null);
+      } else if (!focusExercise.groupId && restOwnerId === focusExercise.id) {
+        setRestOwnerId(null);
+      }
+    }
     
     // If part of a group, complete the whole group
     if (activeGroupId && activeGroupMembers.length > 1 && onCompleteGroup) {
@@ -445,10 +596,9 @@ export function WorkoutSessionScreen({
     
     if (item.type === 'superset') {
       // Superset inactive card
-      const firstExercise = itemExercises[0];
-      const lastSet = itemExercises
-        .flatMap(ex => ex.sets)
-        .sort((a, b) => b.timestamp - a.timestamp)[0];
+      const groupId = item.id;
+      const isRestOwner = !isCompleted && restOwnerId === groupId && restStartedAtMs !== null;
+      const hasSets = itemExercises.some(ex => ex.sets.length > 0);
       
       return (
         <div className={`px-4 py-4 rounded-lg border transition-all ${
@@ -459,10 +609,13 @@ export function WorkoutSessionScreen({
           <p className={`text-base ${isCompleted ? 'text-text-muted' : 'text-text-primary'}`}>
             Group · {itemExercises.length} exercises
           </p>
-          {lastSet ? (
+          {isRestOwner ? (
             <p className="text-sm text-text-muted mt-0.5">
-              {formatWeightForDisplay(lastSet.weight)} × {lastSet.reps}
+              Since last set: {formatElapsed(restElapsed)}
             </p>
+          ) : hasSets ? (
+            // Completed cards show nothing (sets are shown elsewhere via chips)
+            null
           ) : (
             <p className="text-sm text-text-muted mt-0.5">Not started</p>
           )}
@@ -473,8 +626,8 @@ export function WorkoutSessionScreen({
       const exercise = itemExercises[0];
       if (!exercise) return null;
       
-      const lastSet = exercise.sets[exercise.sets.length - 1];
-      const lastData = lastSessionData.get(exercise.name);
+      const isRestOwner = !isCompleted && restOwnerId === exercise.id && restStartedAtMs !== null;
+      const hasSets = exercise.sets.length > 0;
       
       return (
         <div className={`px-4 py-4 rounded-lg border transition-all ${
@@ -485,14 +638,13 @@ export function WorkoutSessionScreen({
           <p className={`text-base ${isCompleted ? 'text-text-muted' : 'text-text-primary'}`}>
             {exercise.name}
           </p>
-          {lastSet ? (
+          {isRestOwner ? (
             <p className="text-sm text-text-muted mt-0.5">
-              {formatWeightForDisplay(lastSet.weight)} × {lastSet.reps}
+              Since last set: {formatElapsed(restElapsed)}
             </p>
-          ) : lastData ? (
-            <p className="text-sm text-text-muted mt-0.5">
-              Not started · {formatRelativeTime(lastData.date)}
-            </p>
+          ) : hasSets ? (
+            // Completed cards show nothing (sets are shown elsewhere via chips)
+            null
           ) : (
             <p className="text-sm text-text-muted mt-0.5">Not started</p>
           )}
@@ -894,12 +1046,29 @@ export function WorkoutSessionScreen({
           groupId={groupId}
           exercises={exercises}
           lastSessionData={lastSessionData}
+          allWorkouts={allWorkouts}
           onAddSet={onAddSupersetSet}
           onCompleteGroup={onCompleteGroup}
           onDeleteSet={onDeleteSet}
-          restTimerStart={restTimerStart}
-          restTimerElapsed={restTimerElapsed}
-          onRestTimerChange={(start) => setRestTimerStart(start)}
+          restOwnerId={restOwnerId === groupId ? groupId : null}
+          restElapsed={restOwnerId === groupId ? restElapsed : 0}
+          onRestTimerChange={(ownerId) => {
+            setRestOwnerId(ownerId);
+            if (ownerId) {
+              // Find the timestamp for the owner
+              const groupExercises = exercises.filter(ex => ex.groupId === ownerId);
+              if (groupExercises.length > 0) {
+                const groupLastSetAt = getGroupLastSetAt(groupExercises);
+                setRestStartedAtMs(groupLastSetAt);
+              } else {
+                const exercise = exercises.find(ex => ex.id === ownerId);
+                setRestStartedAtMs(exercise?.lastSetAt || null);
+              }
+            } else {
+              setRestStartedAtMs(null);
+            }
+          }}
+          nowMs={timerNow}
           onAddToGroup={() => {
             setActiveGroupIdForManagement(groupId);
             setShowPairAnother(true);
@@ -1016,13 +1185,16 @@ export function WorkoutSessionScreen({
             {exercise.sets.length === 0 && (() => {
               const lastData = lastSessionData.get(exercise.name);
               // Defensive check: ensure lastData exists and has valid sets from previous session
-              if (!lastData || !lastData.sets || lastData.sets.length === 0) return null;
+              if (!lastData || !lastData.sets || !lastData.sets.length) return null;
               
               // Create defensive copy to prevent any mutation
               const lastSessionCopy = {
                 sets: [...lastData.sets], // Copy array to prevent mutation
                 date: lastData.date,
               };
+              
+              // Get comparison flag
+              const comparisonFlag = getComparisonFlag(exercise.name, allWorkouts);
               
               return (
                 <LastSessionStats
@@ -1035,34 +1207,41 @@ export function WorkoutSessionScreen({
                     setWeight(displayWeight.toString());
                     setReps(chipReps.toString());
                   }}
+                  onLabelPress={() => {
+                    setHistoryExerciseName(exercise.name);
+                    setShowHistorySheet(true);
+                  }}
+                  comparisonFlag={comparisonFlag.show ? comparisonFlag.message : null}
+                  showChevron={false}
                 />
               );
             })()}
           </div>
 
-          {/* Since last set timer - shown when sets exist, replaces last set stat position */}
-          {restTimerStart !== null && exercise.sets.length > 0 ? (
+          {/* Large "Since last set" section - shown only when this exercise is the rest owner and expanded */}
+          {restOwnerId === exercise.id && !exercise.isComplete && restStartedAtMs !== null && (
             <div className="flex items-center justify-between px-3 py-2 bg-surface/50 rounded-lg border border-border-subtle">
               <div className="flex items-center gap-3">
                 <Clock className="w-4 h-4 text-text-muted" />
                 <div>
                   <p className="text-xs uppercase tracking-wide text-text-muted">Since last set</p>
                   <p className="text-lg tabular-nums">
-                    {Math.floor(restTimerElapsed / 60)}:{(restTimerElapsed % 60).toString().padStart(2, '0')}
+                    {formatRestTime(restElapsed)}
                   </p>
                 </div>
               </div>
               <button
                 onClick={() => {
-                  setRestTimerStart(null);
-                  setRestTimerElapsed(0);
+                  // Clear rest context for this exercise
+                  setRestOwnerId(null);
+                  setRestStartedAtMs(null);
                 }}
                 className="p-1.5 text-text-muted hover:text-text-primary transition-colors rounded-lg hover:bg-surface"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-          ) : null}
+          )}
 
           {/* Sets list - directly below timer (only shown when sets exist) */}
           {exercise.sets.length > 0 && (
@@ -1106,10 +1285,16 @@ export function WorkoutSessionScreen({
     );
   };
 
+  // Compute workout title based on period of day (stable for session)
+  // Only show title when session has multiple exercise slots (workout, not single exercise)
+  // Reuse sessionItems computed earlier in the component
+  const slotCount = sessionItems.length;
+  const workoutTitle = (startedAt && slotCount > 1) ? formatWorkoutTitle(startedAt) : undefined;
+
   return (
     <div className="h-screen flex flex-col bg-panel">
       <TopBar
-        title={workoutName}
+        title={workoutTitle}
         onBack={onBack}
         rightAction={
           startedAt ? (
@@ -1518,16 +1703,35 @@ export function WorkoutSessionScreen({
         />
       )}
 
+      {/* Exercise History Bottom Sheet */}
+      {historyExerciseName && (
+        <ExerciseHistoryBottomSheet
+          isOpen={showHistorySheet}
+          onClose={() => {
+            setShowHistorySheet(false);
+            setHistoryExerciseName(null);
+          }}
+          exerciseName={historyExerciseName}
+          sessions={getRecentSessionsForExercise(historyExerciseName, allWorkouts, 4)}
+          onChipPress={(chipWeightKg, chipReps) => {
+            // Chip tap prefills draft inputs and closes sheet
+            const displayWeight = convertKgToDisplay(chipWeightKg);
+            setWeight(displayWeight.toString());
+            setReps(chipReps.toString());
+            setShowHistorySheet(false);
+            setHistoryExerciseName(null);
+          }}
+        />
+      )}
+
       {/* Finish Workout Confirmation Bottom Sheet */}
       <CompactBottomSheet
         isOpen={showFinishConfirmation}
         onClose={() => setShowFinishConfirmation(false)}
         title="Finish workout?"
+        hideCloseButton={true}
       >
         <div className="space-y-4">
-          <p className="text-sm text-text-muted">
-            You can review details on the summary.
-          </p>
           <OverflowActionGroup
             actions={[
               {

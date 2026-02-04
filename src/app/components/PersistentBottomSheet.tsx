@@ -174,7 +174,12 @@ export function PersistentBottomSheet({
         </button>
 
         {/* Content */}
-        <div className={`px-5 pb-6 transition-opacity duration-300 ${isExpanded ? 'overflow-y-auto max-h-[calc(80vh-80px)] opacity-100' : 'overflow-hidden opacity-100'}`}>
+        <div 
+          className={`px-5 transition-opacity duration-300 ${isExpanded ? 'overflow-y-auto max-h-[calc(80vh-80px)] opacity-100' : 'overflow-hidden opacity-100'}`}
+          style={{
+            paddingBottom: `max(calc(5rem + env(safe-area-inset-bottom, 0px)), calc(5rem + env(safe-area-inset-bottom, 0px)))`,
+          }}
+        >
           {typeof children === 'function' ? children(isExpanded) : children}
         </div>
       </div>

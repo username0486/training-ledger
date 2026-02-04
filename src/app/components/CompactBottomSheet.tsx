@@ -5,6 +5,7 @@ interface CompactBottomSheetProps {
   isOpen: boolean;
   onClose: () => void;
   title?: string;
+  hideCloseButton?: boolean; // Hide the X close button
   children: ReactNode;
 }
 
@@ -16,6 +17,7 @@ export function CompactBottomSheet({
   isOpen,
   onClose,
   title,
+  hideCloseButton = false,
   children,
 }: CompactBottomSheetProps) {
   const [isDragging, setIsDragging] = useState(false);
@@ -132,21 +134,23 @@ export function CompactBottomSheet({
         {/* Content - auto-sized to content height */}
         <div 
           ref={contentRef}
-          className="px-6 pb-6"
+          className="px-6"
           style={{
-            paddingBottom: 'max(1.5rem, 0px)',
+            paddingBottom: `max(calc(5rem + env(safe-area-inset-bottom, 0px)), calc(5rem + env(safe-area-inset-bottom, 0px)))`,
           }}
         >
           {title && (
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold">{title}</h3>
-              <button
-                onClick={onClose}
-                className="p-2 -mr-2 rounded-lg hover:bg-surface transition-colors"
-                aria-label="Close"
-              >
-                <X className="w-5 h-5 text-text-muted" />
-              </button>
+              {!hideCloseButton && (
+                <button
+                  onClick={onClose}
+                  className="p-2 -mr-2 rounded-lg hover:bg-surface transition-colors"
+                  aria-label="Close"
+                >
+                  <X className="w-5 h-5 text-text-muted" />
+                </button>
+              )}
             </div>
           )}
           {children}

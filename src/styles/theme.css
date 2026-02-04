@@ -3,6 +3,9 @@
 :root {
   --font-size: 16px;
   
+  /* Signal dark color scheme to browser/OS for keyboard appearance */
+  color-scheme: dark;
+  
   /* Workout app color system - Dark mode default */
   --background: #0a0b0d;
   --panel: #12141a;
@@ -79,6 +82,9 @@
 
 /* Light theme */
 :root.light {
+  /* Signal light color scheme to browser/OS for keyboard appearance */
+  color-scheme: light;
+  
   /* Light mode colors */
   --background: #f8f9fa;
   --panel: #ffffff;

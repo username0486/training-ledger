@@ -1,5 +1,6 @@
 import { Set } from '../types';
 import { formatWeightForDisplay } from '../../utils/weightFormat';
+import { getSetsInDisplayOrder } from '../utils/setOrdering';
 
 interface CompletedSetsPanelProps {
   sets: Set[];
@@ -11,6 +12,7 @@ interface CompletedSetsPanelProps {
  * Reusable component for displaying completed sets
  * Used in both standalone exercises and Group exercise sub-cards
  * Chips are tappable to open edit/delete sheet
+ * Sets are displayed in chronological order (oldest → newest)
  */
 export function CompletedSetsPanel({
   sets,
@@ -19,11 +21,14 @@ export function CompletedSetsPanel({
 }: CompletedSetsPanelProps) {
   if (sets.length === 0) return null;
 
+  // Sort sets in chronological order (oldest → newest)
+  const sortedSets = getSetsInDisplayOrder(sets);
+
   return (
     <div className="space-y-2">
       <p className="text-xs uppercase tracking-wide text-text-muted">Sets</p>
       <div className="flex flex-row flex-wrap gap-2">
-        {sets.map((set, index) => (
+        {sortedSets.map((set, index) => (
           <button
             key={set.id}
             onClick={() => onSelectSet?.(set.id, index)}

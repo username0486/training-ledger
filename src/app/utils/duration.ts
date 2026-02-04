@@ -85,7 +85,7 @@ export function formatDurationRange(minSec: number, maxSec: number): string {
 
 /**
  * Estimate workout duration range for preview:
- * - If no prior completion: assumes 3 sets per exercise, 60-150s rest between sets, rounds UP per-exercise to nearest minute
+ * - If no prior completion: assumes 3 sets per exercise, 60-150s rest between sets, rounds UP per-slot to nearest minute
  * - If prior completion exists: use last duration ±5 min
  * Returns { minSec, maxSec } or null if cannot estimate
  * 
@@ -94,17 +94,48 @@ export function formatDurationRange(minSec: number, maxSec: number): string {
  * - restBetweenSets = 60-150 seconds
  * - workTimePerSet = 30 seconds
  * - rest occurs only between sets → (setsPerExercise - 1) rests
- * - Per-exercise: min = (3×30) + (2×60) = 210s, max = (3×30) + (2×150) = 390s
+ * - Per-slot (exercise or group): min = (3×30) + (2×60) = 210s, max = (3×30) + (2×150) = 390s
  * - Round UP to nearest minute: min = ceil(210/60) = 4 min, max = ceil(390/60) = 7 min
- * - Total: n × 4 – n × 7 minutes
+ * - Transition time: 3-4 min between slots (not within groups, not after final slot)
+ * 
+ * Slot definition:
+ * - A standalone exercise = 1 slot
+ * - A group of exercises = 1 slot (shared setup/teardown)
  */
 export function estimateWorkoutDuration(
   templateId: string,
-  exerciseCount: number,
+  exerciseCountOrExercises: number | Array<{ groupId?: string | null }>,
   completedWorkouts: Array<{ templateId?: string; durationSec?: number; endedAt?: number }>
 ): { minSec: number; maxSec: number } | null {
-  // Guard: if exercise count is 0 or missing, hide estimate
-  if (!exerciseCount || exerciseCount === 0) {
+  // Determine slot count
+  let slotCount: number;
+  if (typeof exerciseCountOrExercises === 'number') {
+    // Backward compatibility: treat each exercise as a standalone slot
+    slotCount = exerciseCountOrExercises;
+  } else {
+    // Count slots: standalone exercises + groups
+    const exercises = exerciseCountOrExercises;
+    if (exercises.length === 0) {
+      return null;
+    }
+    
+    // Count unique groups (non-null groupIds) + standalone exercises (null/undefined groupId)
+    const groupIds = new Set<string>();
+    let standaloneCount = 0;
+    
+    exercises.forEach(ex => {
+      if (ex.groupId) {
+        groupIds.add(ex.groupId);
+      } else {
+        standaloneCount++;
+      }
+    });
+    
+    slotCount = groupIds.size + standaloneCount;
+  }
+  
+  // Guard: if slot count is 0, hide estimate
+  if (slotCount === 0) {
     return null;
   }
   
@@ -125,24 +156,29 @@ export function estimateWorkoutDuration(
     };
   }
   
-  // No prior completion: use exercise count heuristic with 3 sets per exercise
-  // Per-exercise time calculation:
+  // No prior completion: use slot-based heuristic
+  // Per-slot time calculation:
   // - Work time: 3 sets × 30 seconds = 90 seconds
   // - Rest time: (3 - 1) rests between sets
   //   - Min rest: 2 × 60 = 120 seconds
   //   - Max rest: 2 × 150 = 300 seconds
-  // - Total per exercise: min = 90 + 120 = 210s, max = 90 + 300 = 390s
+  // - Total per slot: min = 90 + 120 = 210s, max = 90 + 300 = 390s
   // - Round UP to nearest minute: min = ceil(210/60) = 4 min, max = ceil(390/60) = 7 min
-  const minExerciseSec = (3 * 30) + (2 * 60);  // 210 seconds
-  const maxExerciseSec = (3 * 30) + (2 * 150); // 390 seconds
+  const minSlotSec = (3 * 30) + (2 * 60);  // 210 seconds
+  const maxSlotSec = (3 * 30) + (2 * 150); // 390 seconds
   
   // Round UP to nearest whole minute
-  const minExerciseMin = Math.ceil(minExerciseSec / 60); // 4 minutes
-  const maxExerciseMin = Math.ceil(maxExerciseSec / 60); // 7 minutes
+  const minSlotMin = Math.ceil(minSlotSec / 60); // 4 minutes
+  const maxSlotMin = Math.ceil(maxSlotSec / 60); // 7 minutes
+  
+  // Transition time between slots (not after final slot)
+  const minTransitionMin = 3;
+  const maxTransitionMin = 4;
+  const transitionCount = Math.max(0, slotCount - 1);
   
   // Total workout estimate
-  const minTotalMin = exerciseCount * minExerciseMin;
-  const maxTotalMin = exerciseCount * maxExerciseMin;
+  const minTotalMin = (slotCount * minSlotMin) + (transitionCount * minTransitionMin);
+  const maxTotalMin = (slotCount * maxSlotMin) + (transitionCount * maxTransitionMin);
   
   return {
     minSec: minTotalMin * 60,
