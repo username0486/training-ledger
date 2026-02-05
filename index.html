@@ -23,13 +23,14 @@
                   theme = parsed.appearance;
                 }
               } catch (e) {
-                // JSON parse failed, will fallback to old key below
+                // Fallback to old localStorage key
+                const oldTheme = localStorage.getItem('workout-app-theme');
+                if (oldTheme === 'light' || oldTheme === 'dark') {
+                  theme = oldTheme;
+                }
               }
-            }
-            
-            // Fallback to old localStorage key for backward compatibility
-            // (if theme is still default or parsing failed)
-            if (theme === 'dark') {
+            } else {
+              // Check old localStorage key for backward compatibility
               const oldTheme = localStorage.getItem('workout-app-theme');
               if (oldTheme === 'light' || oldTheme === 'dark') {
                 theme = oldTheme;
