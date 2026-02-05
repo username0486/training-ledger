@@ -516,6 +516,11 @@ export function WorkoutSessionScreen({
     setRestOwnerId(ownerId);
     // Update restStartedAtMs to the timestamp of the set we just logged
     setRestStartedAtMs(Date.now());
+    if (focusExercise.groupId) {
+      setRestOwnerId(focusExercise.groupId);
+    } else {
+      setRestOwnerId(focusExercise.id);
+    }
   };
 
   const handleDeleteSet = (setId: string) => {

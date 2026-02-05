@@ -91,26 +91,6 @@ export function HomeScreen({
     return getElapsedSince(session.lastSetAt, nowMs);
   };
 
-  // Get status text for in-progress session cards
-  // Shows "Since last set: X" if lastSetAt exists, otherwise "Started X ago" using startTime
-  const getSessionStatusText = (session: Workout | IncompleteExerciseSession | AdHocLoggingSession | null): string => {
-    if (!session) return 'Not started';
-    
-    // If lastSetAt exists, show time since last set
-    if (session.lastSetAt) {
-      const elapsed = getElapsedSince(session.lastSetAt, nowMs);
-      return `Since last set: ${formatElapsed(elapsed)}`;
-    }
-    
-    // If no sets logged yet, show time since session started
-    if (session.startTime) {
-      return `Started ${formatTimeAgo(session.startTime)}`;
-    }
-    
-    // Fallback (shouldn't happen for in-progress sessions)
-    return 'Not started';
-  };
-
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-2xl mx-auto p-5 space-y-6">
@@ -158,7 +138,10 @@ export function HomeScreen({
                         {unfinishedWorkout.exercises.length} {unfinishedWorkout.exercises.length === 1 ? 'exercise' : 'exercises'}
                       </p>
                       <p className="text-text-muted">
-                        {getSessionStatusText(unfinishedWorkout)}
+                        {(() => {
+                          const elapsed = getSessionElapsed(unfinishedWorkout);
+                          return elapsed !== null ? `Since last set: ${formatElapsed(elapsed)}` : 'Not started';
+                        })()}
                       </p>
                     </div>
                   </div>
@@ -201,7 +184,10 @@ export function HomeScreen({
                         {incompleteExerciseSession.sets.length} {incompleteExerciseSession.sets.length === 1 ? 'set' : 'sets'} logged
                       </p>
                       <p className="text-text-muted">
-                        {getSessionStatusText(incompleteExerciseSession)}
+                        {(() => {
+                          const elapsed = getSessionElapsed(incompleteExerciseSession);
+                          return elapsed !== null ? `Since last set: ${formatElapsed(elapsed)}` : 'Not started';
+                        })()}
                       </p>
                     </div>
                   </div>
@@ -244,7 +230,10 @@ export function HomeScreen({
                         {adHocSession.exercises.length} {adHocSession.exercises.length === 1 ? 'exercise' : 'exercises'}
                       </p>
                       <p className="text-text-muted">
-                        {getSessionStatusText(adHocSession)}
+                        {(() => {
+                          const elapsed = getSessionElapsed(adHocSession);
+                          return elapsed !== null ? `Since last set: ${formatElapsed(elapsed)}` : 'Not started';
+                        })()}
                       </p>
                     </div>
                   </div>
