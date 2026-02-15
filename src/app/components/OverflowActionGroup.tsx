@@ -28,7 +28,7 @@ export function OverflowActionGroup({ actions }: OverflowActionGroupProps) {
             key={index}
             onClick={action.onPress}
             className={`
-              w-full flex items-center justify-center gap-3 px-4 py-3.5
+              w-full flex items-center gap-3 px-4 py-3.5
               transition-colors
               ${index > 0 ? 'border-t border-border-subtle' : ''}
               ${action.destructive 
@@ -38,9 +38,9 @@ export function OverflowActionGroup({ actions }: OverflowActionGroupProps) {
             `}
           >
             {Icon && (
-              <Icon className={`w-5 h-5 ${action.destructive ? 'text-danger' : 'text-text-muted'}`} />
+              <Icon className={`w-5 h-5 flex-shrink-0 ${action.destructive ? 'text-danger' : 'text-text-muted'}`} />
             )}
-            <span className="font-medium text-center">{action.label}</span>
+            <span className="font-medium text-left flex-1">{action.label}</span>
           </button>
         );
       })}

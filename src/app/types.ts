@@ -3,6 +3,7 @@ export interface Exercise {
   name: string;
   sets: Set[];
   isComplete?: boolean;
+  isSkipped?: boolean; // when true (in a group): excluded from group set propagation, shown muted
   groupId?: string | null; // exercises with same groupId are grouped (superset/tri-set)
   lastSetAt?: number; // timestamp of last set logged for this exercise (for rest timer)
 }
@@ -77,6 +78,7 @@ export interface AdHocLoggingSession {
     addedAt: number;
     sets: Set[];
     isComplete?: boolean;
+    isSkipped?: boolean; // when true (in a group): excluded from group set propagation
     groupId?: string | null; // exercises with same groupId are grouped (superset/tri-set)
     lastSetAt?: number; // timestamp of last set logged for this exercise (for rest timer)
   }>;

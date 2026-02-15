@@ -1,11 +1,11 @@
-# Release Checklist - Training Ledger v1.0.0
+# Release Checklist - Training Ledger v0.0.2
 
 This checklist covers the steps required to build and deploy a production-ready release of Training Ledger.
 
 ## Pre-Release Configuration
 
 ### ✅ Version & Build Number
-- [x] Version updated to `0.3.0` in `package.json`
+- [x] Version updated to `0.0.2` in `package.json`
 - [ ] Build number/version verified in built artifacts
 - [ ] Version displayed correctly in app (if About screen exists)
 
@@ -189,6 +189,6 @@ If issues found post-deployment:
 ---
 
 **Release Date:** TBD  
-**Version:** 1.0.0  
+**Version:** 0.0.2  
 **Build:** Production
 

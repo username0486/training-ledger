@@ -24,7 +24,7 @@ export function loadTemplates(): WorkoutTemplate[] {
   }
 }
 
-export function saveTemplates(templates: WorkoutTemplate[]): void {
+export function saveTemplates(templates: WorkoutTemplate[]): boolean {
   try {
     const result = loadState();
     if (result.success && result.state) {
@@ -32,18 +32,20 @@ export function saveTemplates(templates: WorkoutTemplate[]): void {
         ...result.state,
         templates,
       };
-      saveState(updatedState);
-    } else {
-      // Fallback to legacy storage
-      localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates));
+      const saveResult = saveState(updatedState);
+      return saveResult.success;
     }
+    // Fallback to legacy storage
+    localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates));
+    return true;
   } catch (error) {
     console.error('Failed to save templates:', error);
-    // Fallback to legacy storage
     try {
       localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates));
+      return true;
     } catch (fallbackError) {
       console.error('Fallback save also failed:', fallbackError);
+      return false;
     }
   }
 }
@@ -61,8 +63,8 @@ export function saveTemplate(template: WorkoutTemplate): void {
   saveTemplates(templates);
 }
 
-export function deleteTemplate(templateId: string): void {
+export function deleteTemplate(templateId: string): boolean {
   const templates = loadTemplates();
   const filtered = templates.filter(t => t.id !== templateId);
-  saveTemplates(filtered);
+  return saveTemplates(filtered);
 }

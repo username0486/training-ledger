@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Plus, ListPlus, Play, Database, Trash2, Settings } from 'lucide-react';
+import { Plus, ListPlus, Play, Database, Settings } from 'lucide-react';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
+import { Modal } from '../components/Modal';
+import { SwipeableSavedWorkoutRow } from '../components/SwipeableSavedWorkoutRow';
 import { Workout, AdHocLoggingSession } from '../types';
 import { IncompleteExerciseSession } from '../types';
 import { WorkoutTemplate } from '../types/templates';
@@ -29,6 +31,7 @@ interface HomeScreenProps {
   onDiscardExercise: () => void;
   onDiscardAdHocSession: () => void;
   onOpenSettings: () => void;
+  onDeleteTemplate?: (templateId: string) => void;
 }
 
 export function HomeScreen({
@@ -51,6 +54,7 @@ export function HomeScreen({
   onDiscardExercise,
   onDiscardAdHocSession,
   onOpenSettings,
+  onDeleteTemplate,
 }: HomeScreenProps) {
 
   // Dev-only: Seed demo data
@@ -75,6 +79,11 @@ export function HomeScreen({
       alert('Demo data reset and reseeded! Refresh the page to see changes.');
     }
   };
+
+  // Delete confirmation modal
+  const [templateToDelete, setTemplateToDelete] = useState<WorkoutTemplate | null>(null);
+  // Increment when modal is cancelled - tells swipeable rows to close
+  const [swipeResetTrigger, setSwipeResetTrigger] = useState(0);
 
   // Session-level tick for consistent elapsed time computation
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -306,37 +315,90 @@ export function HomeScreen({
             </Card>
           ) : (
             <div className="space-y-2">
-              {workoutTemplates.map((template) => (
-                <Card 
-                  key={template.id} 
-                  gradient 
-                  className="group"
-                  onClick={() => onViewTemplate(template.id)}
-                >
-                  <div className="flex items-center gap-4">
-                    <div className="flex-1 min-w-0">
-                      <h3 className="mb-0.5 truncate">{template.name}</h3>
-                      <p className="text-text-muted">
-                        {template.exerciseNames.length} {template.exerciseNames.length === 1 ? 'exercise' : 'exercises'}
-                      </p>
+              {workoutTemplates.map((template) =>
+                onDeleteTemplate ? (
+                  <SwipeableSavedWorkoutRow
+                    key={template.id}
+                    template={template}
+                    onViewTemplate={onViewTemplate}
+                    onStartTemplate={onStartTemplate}
+                    onRequestDelete={(t) => setTemplateToDelete(t)}
+                    resetTrigger={swipeResetTrigger}
+                  />
+                ) : (
+                  <Card
+                    key={template.id}
+                    gradient
+                    className="group"
+                    onClick={() => onViewTemplate(template.id)}
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="flex-1 min-w-0">
+                        <h3 className="mb-0.5 truncate">{template.name}</h3>
+                        <p className="text-text-muted">
+                          {template.exerciseNames.length} {template.exerciseNames.length === 1 ? 'exercise' : 'exercises'}
+                        </p>
+                      </div>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onStartTemplate(template.id);
+                        }}
+                      >
+                        <Play className="w-4 h-4 mr-1.5 inline" />
+                        Record
+                      </Button>
                     </div>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onStartTemplate(template.id);
-                      }}
-                    >
-                      <Play className="w-4 h-4 mr-1.5 inline" />
-                      Record
-                    </Button>
-                  </div>
-                </Card>
-              ))}
+                  </Card>
+                )
+              )}
             </div>
           )}
         </div>
+
+        {/* Delete confirmation modal */}
+        <Modal
+          isOpen={templateToDelete !== null}
+          onClose={() => {
+            setTemplateToDelete(null);
+            setSwipeResetTrigger((t) => t + 1);
+          }}
+          title="Delete workout?"
+          actions={
+            <>
+              <Button
+                variant="neutral"
+                onClick={() => {
+                  setTemplateToDelete(null);
+                  setSwipeResetTrigger((t) => t + 1);
+                }}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  if (templateToDelete && onDeleteTemplate) {
+                    onDeleteTemplate(templateToDelete.id);
+                    setTemplateToDelete(null);
+                  }
+                }}
+                className="flex-1"
+              >
+                Delete
+              </Button>
+            </>
+          }
+        >
+          {templateToDelete && (
+            <p className="text-text-muted">
+              This will remove the saved workout from your list. Past workout history will not be affected.
+            </p>
+          )}
+        </Modal>
 
         {/* Dev-only: Seed demo data buttons */}
         {import.meta.env.DEV && (

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Check, ChevronRight, GripVertical, Plus, SkipForward, Clock, MoreHorizontal, X, ArrowRightLeft, ListEnd, Link2 } from 'lucide-react';
+import { Check, ChevronRight, GripVertical, Plus, SkipForward, Clock, MoreHorizontal, X, ArrowRightLeft, ListEnd, Link2, Trash2 } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -25,7 +25,7 @@ import {
   DropdownMenuTrigger,
 } from '../components/ui/dropdown-menu';
 import { CompactBottomSheet } from '../components/CompactBottomSheet';
-import { OverflowActionGroup } from '../components/OverflowActionGroup';
+import { OverflowActionGroup, OverflowAction } from '../components/OverflowActionGroup';
 import { CompletedSetsPanel } from '../components/CompletedSetsPanel';
 import { RepsWeightGrid } from '../components/RepsWeightGrid';
 import { ManageSetSheet } from '../components/ManageSetSheet';
@@ -51,6 +51,7 @@ interface WorkoutSessionScreenProps {
   onCompleteGroup?: (exerciseIds: string[]) => void;
   onSkipExercise: (exerciseId: string) => void;
   onDeferExercise: (exerciseId: string) => void;
+  onDeleteExercise?: (exerciseId: string) => void;
   onSwapExercise: (exerciseId: string, newExerciseName: string) => void;
   onReorderExercises: (exercises: Exercise[]) => void;
   onFinishWorkout: () => void;
@@ -62,7 +63,13 @@ interface WorkoutSessionScreenProps {
   onAddToGroup?: (groupId: string, instanceId: string) => void;
   onMergeGroups?: (groupId1: string, groupId2: string) => void;
   onUngroup?: (instanceId: string) => void;
+  onUngroupGroup?: (groupId: string) => void;
   onSwapGroupMember?: (groupId: string, sourceMemberInstanceId: string, replacementInstanceId: string) => void;
+  onSkipGroup?: (exerciseIds: string[]) => void;
+  onDeferGroup?: (exerciseIds: string[]) => void;
+  onDeleteGroup?: (exerciseIds: string[]) => void;
+  onSkipExerciseInGroup?: (exerciseId: string) => void;
+  onUnskipExerciseInGroup?: (exerciseId: string) => void;
 }
 
 export function WorkoutSessionScreen({
@@ -80,6 +87,7 @@ export function WorkoutSessionScreen({
   onCompleteGroup,
   onSkipExercise,
   onDeferExercise,
+  onDeleteExercise,
   onSwapExercise,
   onReorderExercises,
   onFinishWorkout,
@@ -91,10 +99,14 @@ export function WorkoutSessionScreen({
   onAddToGroup,
   onMergeGroups,
   onUngroup,
+  onUngroupGroup,
   onSwapGroupMember,
+  onSkipGroup,
+  onDeferGroup,
+  onDeleteGroup,
+  onSkipExerciseInGroup,
+  onUnskipExerciseInGroup,
 }: WorkoutSessionScreenProps) {
-  const [weight, setWeight] = useState<string>('');
-  const [reps, setReps] = useState<string>('');
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showSwapExercise, setShowSwapExercise] = useState(false);
@@ -228,6 +240,16 @@ export function WorkoutSessionScreen({
     return firstIncomplete?.id || null;
   });
   
+  // Store input state per exercise to preserve user-entered values when navigating
+  const [exerciseInputs, setExerciseInputs] = useState<Map<string, { weight: string; reps: string }>>(new Map());
+  
+  // Initialize weight and reps with empty strings (will be restored/prefilled in useEffect)
+  const [weight, setWeight] = useState<string>('');
+  const [reps, setReps] = useState<string>('');
+  
+  // Track previous exercise ID to detect navigation (to avoid saving during restoration)
+  const previousExerciseIdRef = useRef<string | null>(null);
+  
   // Store last focused exercise ID before all exercises become complete
   // This allows us to restore the exact UI state when returning from "All exercises complete" screen
   const lastFocusedExerciseIdRef = useRef<string | null>(null);
@@ -359,24 +381,71 @@ export function WorkoutSessionScreen({
       })
     : [];
   
-  // Prefill inputs with last set's values ONLY when focus exercise changes (not when sets change)
-  // This prevents clearing inputs when editing sets on completed exercises
+  // Handler for input changes from SupersetBlock (grouped exercises)
+  const handleGroupExerciseInputChange = (exerciseId: string, weight: string, reps: string) => {
+    setExerciseInputs(prev => {
+      const updated = new Map(prev);
+      if (weight !== '' || reps !== '') {
+        updated.set(exerciseId, { weight, reps });
+      } else {
+        // Remove empty inputs to keep map clean
+        updated.delete(exerciseId);
+      }
+      return updated;
+    });
+  };
+
+  // Save inputs to per-exercise state when they change (but not when restoring from saved state)
+  useEffect(() => {
+    const exerciseId = interactionFocusExerciseId || progressionExerciseId;
+    
+    // Don't save if exercise ID changed (we're navigating - restoration will happen in the other useEffect)
+    if (previousExerciseIdRef.current !== exerciseId) {
+      previousExerciseIdRef.current = exerciseId;
+      return; // Skip saving during navigation - restoration will happen next
+    }
+    
+    // Only save if there's actual input (not empty) and exercise ID hasn't changed
+    if (exerciseId && (weight !== '' || reps !== '')) {
+      setExerciseInputs(prev => {
+        const updated = new Map(prev);
+        updated.set(exerciseId, { weight, reps });
+        return updated;
+      });
+    }
+  }, [weight, reps, interactionFocusExerciseId, progressionExerciseId]);
+  
+  // Restore or prefill inputs when focus exercise changes
+  // Only prefill from last set if user hasn't entered anything for this exercise
   // Weight is stored in kg (canonical), convert to display unit for input
   useEffect(() => {
     if (focusExercise) {
-      if (focusExercise.sets.length > 0) {
-        const lastSet = focusExercise.sets[focusExercise.sets.length - 1];
-        // Convert from kg (canonical) to display unit
-        const displayWeight = convertKgToDisplay(lastSet.weight);
-        setWeight(displayWeight.toString());
-        setReps(lastSet.reps.toString());
+      const exerciseId = focusExercise.id;
+      const savedInputs = exerciseInputs.get(exerciseId);
+      
+      // Update previous exercise ID ref to match current (so save useEffect knows we've navigated)
+      previousExerciseIdRef.current = exerciseId;
+      
+      if (savedInputs && (savedInputs.weight !== '' || savedInputs.reps !== '')) {
+        // Restore user-entered values if they exist and are not empty
+        setWeight(savedInputs.weight);
+        setReps(savedInputs.reps);
       } else {
-        // Clear fields when moving to a new exercise (no sets yet)
-        setWeight('');
-        setReps('');
+        // No saved input - prefill from last set if available
+        if (focusExercise.sets.length > 0) {
+          const lastSet = focusExercise.sets[focusExercise.sets.length - 1];
+          // Convert from kg (canonical) to display unit
+          const displayWeight = convertKgToDisplay(lastSet.weight);
+          setWeight(displayWeight.toString());
+          setReps(lastSet.reps.toString());
+        } else {
+          // Clear fields when moving to a new exercise (no sets yet)
+          setWeight('');
+          setReps('');
+        }
       }
     }
-  }, [focusExercise?.id]); // Only depend on exercise ID, not sets.length
+  }, [focusExercise?.id]); // Only depend on exercise ID to avoid loops
   
   // Completed exercises
   const completedExercises = exercises.filter(ex => ex.isComplete);
@@ -508,6 +577,7 @@ export function WorkoutSessionScreen({
     onAddSet(focusExercise.id, wKg, r, currentRestElapsed > 0 ? currentRestElapsed : undefined);
     
     // Prefill with the set we just added (for next set) - keep in display unit
+    // This updates the per-exercise state automatically via the useEffect above
     setWeight(wDisplay.toString());
     setReps(r.toString());
     
@@ -1052,17 +1122,25 @@ export function WorkoutSessionScreen({
           onDeleteSet={onDeleteSet}
           restOwnerId={restOwnerId === groupId ? groupId : null}
           restElapsed={restOwnerId === groupId ? restElapsed : 0}
-          onRestTimerChange={(ownerId) => {
+          exerciseInputs={exerciseInputs}
+          onInputChange={handleGroupExerciseInputChange}
+          onRestTimerChange={(ownerId, timestamp) => {
             setRestOwnerId(ownerId);
             if (ownerId) {
-              // Find the timestamp for the owner
-              const groupExercises = exercises.filter(ex => ex.groupId === ownerId);
-              if (groupExercises.length > 0) {
-                const groupLastSetAt = getGroupLastSetAt(groupExercises);
-                setRestStartedAtMs(groupLastSetAt);
+              // If timestamp is provided (from set logging), use it immediately
+              // Otherwise, try to find it from exercises (for manual rest timer changes)
+              if (timestamp !== undefined) {
+                setRestStartedAtMs(timestamp);
               } else {
-                const exercise = exercises.find(ex => ex.id === ownerId);
-                setRestStartedAtMs(exercise?.lastSetAt || null);
+                // Find the timestamp for the owner
+                const groupExercises = exercises.filter(ex => ex.groupId === ownerId);
+                if (groupExercises.length > 0) {
+                  const groupLastSetAt = getGroupLastSetAt(groupExercises);
+                  setRestStartedAtMs(groupLastSetAt);
+                } else {
+                  const exercise = exercises.find(ex => ex.id === ownerId);
+                  setRestStartedAtMs(exercise?.lastSetAt || null);
+                }
               }
             } else {
               setRestStartedAtMs(null);
@@ -1100,9 +1178,20 @@ export function WorkoutSessionScreen({
             setExerciseToSwapId(exerciseId);
             setShowSwapExerciseInSuperset(true);
           }}
-          onSkipExerciseInGroup={(exerciseId) => {
-            onSkipExercise(exerciseId);
+          onSkipExerciseInGroup={onSkipExerciseInGroup ? (exerciseId) => onSkipExerciseInGroup(exerciseId) : undefined}
+          onUnskipExerciseInGroup={onUnskipExerciseInGroup}
+          onDeferExerciseInGroup={(exerciseId) => {
+            onDeferExercise(exerciseId);
           }}
+          onDeleteExerciseInGroup={(exerciseId) => {
+            if (onDeleteExercise) {
+              onDeleteExercise(exerciseId);
+            }
+          }}
+          onSkipGroup={onSkipGroup}
+          onDeferGroup={onDeferGroup}
+          onDeleteGroup={onDeleteGroup}
+          onUngroupGroup={onUngroupGroup}
           onUpdateSet={onUpdateSet}
           onSelectSet={(exerciseId, setId, setIndex) => {
             // Set focus to this exercise so it remains active/expanded during editing
@@ -1579,25 +1668,16 @@ export function WorkoutSessionScreen({
             const exercise = exercises.find(ex => ex.id === overflowExerciseId);
             if (!exercise) return null;
             
-            const groupInfo = getGroupInfo(exercises, exercise.id);
-            const actions = [
-              {
-                label: 'Swap exercise',
-                icon: ArrowRightLeft,
-                onPress: () => {
-                  setShowSwapExercise(true);
-                  setShowExerciseOverflowSheet(false);
-                  setOverflowExerciseId(null);
-                },
-              },
-            ];
+            const actions: OverflowAction[] = [];
             
-            // Pair with (conditional: only if grouping is supported and exercise is not already in a group)
-            if (onGroupExercises && !groupInfo.groupId) {
+            // 1. Pair exercise (always show if grouping is supported)
+            if (onGroupExercises) {
               actions.push({
-                label: 'Pair with',
+                label: 'Pair exercise',
                 icon: Link2,
                 onPress: () => {
+                  setInteractionFocusExerciseId(exercise.id);
+                  if (!exercise.isComplete) setProgressionExerciseId(exercise.id);
                   setShowPairWith(true);
                   setShowExerciseOverflowSheet(false);
                   setOverflowExerciseId(null);
@@ -1605,39 +1685,74 @@ export function WorkoutSessionScreen({
               });
             }
             
-            // Unpair (if exercise is already in a group)
-            if (onGroupExercises && groupInfo.groupId && onUngroup) {
-              actions.push({
-                label: 'Unpair',
-                icon: X,
-                onPress: () => {
-                  onUngroup(exercise.id);
-                  setShowExerciseOverflowSheet(false);
-                  setOverflowExerciseId(null);
-                },
-              });
-            }
-            
-            actions.push(
-              {
-                label: 'Defer to end',
-                icon: ListEnd,
-                onPress: () => {
-                  handleDeferExercise(exercise.id);
-                  setShowExerciseOverflowSheet(false);
-                  setOverflowExerciseId(null);
-                },
+            // 2. Swap exercise
+            actions.push({
+              label: 'Swap exercise',
+              icon: ArrowRightLeft,
+              onPress: () => {
+                setInteractionFocusExerciseId(exercise.id);
+                if (!exercise.isComplete) setProgressionExerciseId(exercise.id);
+                setShowSwapExercise(true);
+                setShowExerciseOverflowSheet(false);
+                setOverflowExerciseId(null);
               },
-              {
-                label: 'Skip exercise',
-                icon: SkipForward,
-                onPress: () => {
-                  handleSkipExercise(exercise.id);
+            });
+            
+            // 3. Defer to end
+            actions.push({
+              label: 'Defer to end',
+              icon: ListEnd,
+              onPress: () => {
+                handleDeferExercise(exercise.id);
+                setShowExerciseOverflowSheet(false);
+                setOverflowExerciseId(null);
+              },
+            });
+            
+            // 4. Skip
+            actions.push({
+              label: 'Skip',
+              icon: SkipForward,
+              onPress: () => {
+                handleSkipExercise(exercise.id);
+                setShowExerciseOverflowSheet(false);
+                setOverflowExerciseId(null);
+              },
+            });
+            
+            // 5. Delete (destructive, always last)
+            actions.push({
+              label: 'Delete',
+              icon: Trash2,
+              destructive: true,
+              onPress: () => {
+                  if (onDeleteExercise) {
+                    onDeleteExercise(exercise.id);
+                    // Move focus to next exercise if this was the focused one
+                    if (interactionFocusExerciseId === exercise.id || progressionExerciseId === exercise.id) {
+                      const currentIndex = exercises.findIndex(ex => ex.id === exercise.id);
+                      const nextExercise = exercises.find((ex, idx) => idx > currentIndex && ex.id !== exercise.id);
+                      const prevExercise = exercises.find((ex, idx) => idx < currentIndex && ex.id !== exercise.id);
+                      if (nextExercise) {
+                        setInteractionFocusExerciseId(nextExercise.id);
+                        if (!nextExercise.isComplete) {
+                          setProgressionExerciseId(nextExercise.id);
+                        }
+                      } else if (prevExercise) {
+                        setInteractionFocusExerciseId(prevExercise.id);
+                        if (!prevExercise.isComplete) {
+                          setProgressionExerciseId(prevExercise.id);
+                        }
+                      } else {
+                        setInteractionFocusExerciseId(null);
+                        setProgressionExerciseId(null);
+                      }
+                    }
+                  }
                   setShowExerciseOverflowSheet(false);
                   setOverflowExerciseId(null);
                 },
-              }
-            );
+            });
             
             return <OverflowActionGroup actions={actions} />;
           })()}
