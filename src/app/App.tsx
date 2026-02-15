@@ -30,8 +30,9 @@ import { updateSessionClassificationAndName, generateDefaultSessionName } from '
 import { saveWorkout, deleteWorkouts as deleteWorkoutsApi } from './utils/api';
 import { recordSwap } from '../utils/exerciseSwapHistory';
 import { loadPreferences, getAppearance, setAppearance } from '../utils/preferences';
-import { createGroup, addToGroup, mergeGroups, ungroup, applyGroupingToSession, swapGroupMember } from './utils/exerciseGrouping';
+import { createGroup, addToGroup, mergeGroups, ungroup, ungroupAll, applyGroupingToSession, swapGroupMember } from './utils/exerciseGrouping';
 import { computeDurationSec } from './utils/duration';
+import { Toaster, toast } from 'sonner';
 
 
 type AppScreen = 
@@ -404,7 +405,7 @@ export default function App() {
 
     // Use a more unique ID to avoid conflicts with workouts created by finalizeInProgressSession
     const workoutId = `${Date.now()}-${Math.random()}`;
-    const startedAt = Date.now();
+    const now = Date.now();
     const newWorkout: Workout = {
       id: workoutId,
       name: template.name,
@@ -414,8 +415,8 @@ export default function App() {
         sets: [],
         isComplete: false,
       })),
-      startTime: startedAt,
-      startedAt,
+      startTime: now, // Track when workout was created, but don't start timer yet
+      // Do NOT set startedAt - timer starts when first set is logged
       isComplete: false,
       templateId: templateId, // Store template reference for duration estimation
     };
@@ -437,13 +438,13 @@ export default function App() {
   };
 
   const handleQuickStartInternal = () => {
-    const startedAt = Date.now();
+    const now = Date.now();
     const newWorkout: Workout = {
       id: Date.now().toString(),
       name: 'Quick Workout',
       exercises: [],
-      startTime: startedAt,
-      startedAt,
+      startTime: now, // Track when workout was created, but don't start timer yet
+      // Do NOT set startedAt - timer starts when first set is logged
       isComplete: false,
     };
     setWorkouts(prev => [...prev, newWorkout]);
@@ -454,13 +455,13 @@ export default function App() {
   };
 
   const createWorkoutInternal = (name: string) => {
-    const startedAt = Date.now();
+    const now = Date.now();
     const newWorkout: Workout = {
       id: Date.now().toString(),
       name,
       exercises: [],
-      startTime: startedAt,
-      startedAt,
+      startTime: now, // Track when workout was created, but don't start timer yet
+      // Do NOT set startedAt - timer starts when first set is logged
       isComplete: false,
     };
     setWorkouts(prev => [...prev, newWorkout]);
@@ -470,15 +471,59 @@ export default function App() {
     setScreen({ type: 'workout-session', workoutId: newWorkout.id });
   };
 
+  /**
+   * Start the workout timer when the first exercise is logged.
+   * This is idempotent - it only sets startedAt if it hasn't been set yet.
+   * 
+   * This should be called when:
+   * - First set is added to a workout
+   * - First set is added to an exercise session
+   * - First set is added to an ad-hoc session
+   */
+  const beginFirstExerciseLog = () => {
+    // Check workout sessions
+    const unfinished = getUnfinishedWorkout(workouts);
+    if (unfinished) {
+      const workout = workouts.find(w => w.id === unfinished.id);
+      if (workout && !workout.startedAt) {
+        const startedAt = workout.startTime || Date.now();
+        setWorkouts(prev =>
+          prev.map(w => (w.id === workout.id ? { ...w, startedAt, startTime: w.startTime || startedAt } : w))
+        );
+        return;
+      }
+    }
+
+    // Check exercise sessions
+    if (incompleteExerciseSession && !incompleteExerciseSession.startedAt) {
+      const startedAt = incompleteExerciseSession.startTime || Date.now();
+      setIncompleteExerciseSession({
+        ...incompleteExerciseSession,
+        startedAt,
+        startTime: incompleteExerciseSession.startTime || startedAt,
+      });
+      return;
+    }
+
+    // Check ad-hoc sessions
+    if (adHocSession && !adHocSession.startedAt) {
+      const startedAt = Date.now();
+      setAdHocSession({
+        ...adHocSession,
+        startedAt,
+        startTime: startedAt, // Set startTime when timer starts (for consistency)
+      });
+      return;
+    }
+  };
+
   const startExerciseSessionInternal = (name: string, previousScreen?: AppScreen) => {
     setExerciseSessionSets([]);
-    // Start timing immediately (persisted) so it survives refresh/backgrounding
-    const startedAt = Date.now();
+    // Do NOT start timer here - timer starts when first set is logged
     setIncompleteExerciseSession({
       exerciseName: name,
       sets: [],
-      startTime: startedAt,
-      startedAt,
+      // Do not set startTime or startedAt - these will be set when first set is logged
     });
     setScreen({ type: 'exercise-session', exerciseName: name, previousScreen });
     setShowLogExercise(false);
@@ -520,13 +565,13 @@ export default function App() {
       return;
     }
 
-    const startedAt = Date.now();
+    const now = Date.now();
     const newWorkout: Workout = {
       id: `${Date.now()}-${Math.random()}`, // Ensure unique ID
       name: workout.name,
       exercises: exercisesFromHistory,
-      startTime: startedAt,
-      startedAt,
+      startTime: now, // Track when workout was created, but don't start timer yet
+      // Do NOT set startedAt - timer starts when first set is logged
       isComplete: false, // Explicitly set as incomplete (never copy from history)
     };
 
@@ -651,6 +696,14 @@ export default function App() {
 
   const addSetToExercise = (workoutId: string, exerciseId: string, weight: number, reps: number, restDuration?: number) => {
     const now = Date.now();
+    const workout = workouts.find(w => w.id === workoutId);
+    const isFirstSet = workout && workout.exercises.every(ex => ex.sets.length === 0);
+    
+    // Start timer if this is the first set in the workout
+    if (isFirstSet) {
+      beginFirstExerciseLog();
+    }
+    
     setWorkouts(workouts.map(w => {
       if (w.id === workoutId) {
         const exercise = w.exercises.find(ex => ex.id === exerciseId);
@@ -764,6 +817,14 @@ export default function App() {
 
   const addSupersetSetToWorkout = (workoutId: string, exercises: Array<{ exerciseId: string; weight: number; reps: number }>, supersetSetId: string) => {
     const now = Date.now();
+    const workout = workouts.find(w => w.id === workoutId);
+    const isFirstSet = workout && workout.exercises.every(ex => ex.sets.length === 0);
+    
+    // Start timer if this is the first set in the workout
+    if (isFirstSet) {
+      beginFirstExerciseLog();
+    }
+    
     setWorkouts(workouts.map(w => {
       if (w.id === workoutId) {
         // Find the groupId from the first exercise in the superset
@@ -838,12 +899,95 @@ export default function App() {
   };
 
   const skipExercise = (workoutId: string, exerciseId: string) => {
-    // Remove exercise from workout
+    // Remove exercise from workout (preserves trace as skipped)
     setWorkouts(workouts.map(w => {
       if (w.id === workoutId) {
         return {
           ...w,
           exercises: w.exercises.filter(ex => ex.id !== exerciseId),
+        };
+      }
+      return w;
+    }));
+  };
+
+  const skipExerciseInGroup = (workoutId: string, exerciseId: string) => {
+    // Mark exercise as skipped (stays visible, excluded from group set propagation)
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        return {
+          ...w,
+          exercises: w.exercises.map(ex =>
+            ex.id === exerciseId ? { ...ex, isSkipped: true } : ex
+          ),
+        };
+      }
+      return w;
+    }));
+  };
+
+  const unskipExerciseInGroup = (workoutId: string, exerciseId: string) => {
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        return {
+          ...w,
+          exercises: w.exercises.map(ex =>
+            ex.id === exerciseId ? { ...ex, isSkipped: false } : ex
+          ),
+        };
+      }
+      return w;
+    }));
+  };
+
+  const deleteExercise = (workoutId: string, exerciseId: string) => {
+    // Remove exercise from workout completely (no trace)
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        return {
+          ...w,
+          exercises: w.exercises.filter(ex => ex.id !== exerciseId),
+        };
+      }
+      return w;
+    }));
+  };
+
+  const skipGroup = (workoutId: string, exerciseIds: string[]) => {
+    // Remove all exercises in group from workout (preserves trace as skipped)
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        return {
+          ...w,
+          exercises: w.exercises.filter(ex => !exerciseIds.includes(ex.id)),
+        };
+      }
+      return w;
+    }));
+  };
+
+  const deferGroup = (workoutId: string, exerciseIds: string[]) => {
+    // Move all exercises in group to the bottom of the list
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        const groupExercises = w.exercises.filter(ex => exerciseIds.includes(ex.id));
+        const otherExercises = w.exercises.filter(ex => !exerciseIds.includes(ex.id));
+        return {
+          ...w,
+          exercises: [...otherExercises, ...groupExercises],
+        };
+      }
+      return w;
+    }));
+  };
+
+  const deleteGroup = (workoutId: string, exerciseIds: string[]) => {
+    // Remove all exercises in group from workout completely (no trace)
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        return {
+          ...w,
+          exercises: w.exercises.filter(ex => !exerciseIds.includes(ex.id)),
         };
       }
       return w;
@@ -917,6 +1061,16 @@ export default function App() {
     }));
   };
 
+  const ungroupGroupInWorkout = (workoutId: string, groupId: string) => {
+    setWorkouts(workouts.map(w => {
+      if (w.id === workoutId) {
+        const updatedExercises = ungroupAll(w.exercises, groupId);
+        return { ...w, exercises: updatedExercises };
+      }
+      return w;
+    }));
+  };
+
   const swapGroupMemberInWorkout = (workoutId: string, groupId: string, sourceMemberInstanceId: string, replacementInstanceId: string) => {
     setWorkouts(workouts.map(w => {
       if (w.id === workoutId) {
@@ -949,29 +1103,34 @@ export default function App() {
       );
     }
 
-    // Replace the exercise in the slot
-    // Original exercise's sets remain attached to the original exercise (not moved)
-    // The replacement exercise starts fresh with no sets
+    // Swap semantics:
+    // - No logged sets: replace in place (true swap)
+    // - Has logged sets: keep old exercise with sets in history, insert new exercise after
     setWorkouts(workouts.map(w => {
-      if (w.id === workoutId) {
-        return {
-          ...w,
-          exercises: w.exercises.map(ex => {
-            if (ex.id === exerciseId) {
-              // Replace exercise: new name, new ID, empty sets
-              // Original sets stay on original exercise (they're not moved)
-              return {
-                id: Date.now().toString() + Math.random(), // New ID for replacement
-                name: newExerciseName,
-                sets: [], // Start fresh - original sets remain on original exercise
-                isComplete: false, // Reset completion status
-              };
-            }
-            return ex;
-          }),
-        };
-      }
-      return w;
+      if (w.id !== workoutId) return w;
+      return {
+        ...w,
+        exercises: w.exercises.flatMap(ex => {
+          if (ex.id !== exerciseId) return [ex];
+          // No logged sets: true swap-in-place
+          if (ex.sets.length === 0) {
+            return [{
+              ...ex,
+              name: newExerciseName,
+              sets: [],
+              isComplete: false,
+            }];
+          }
+          // Has logged sets: keep old exercise with sets, insert new after
+          const newEx = {
+            id: Date.now().toString() + Math.random(),
+            name: newExerciseName,
+            sets: [] as typeof ex.sets,
+            isComplete: false,
+          };
+          return [ex, newEx];
+        }),
+      };
     }));
   };
 
@@ -1301,6 +1460,7 @@ export default function App() {
 
   return (
     <div className="size-full flex flex-col bg-background">
+      <Toaster position="bottom" richColors />
       {/* Main content area with bottom padding for fixed nav (only when nav is visible) */}
       <div className={`flex-1 overflow-hidden flex flex-col ${
         !(
@@ -1353,6 +1513,15 @@ export default function App() {
             onResumeExercise={resumeExerciseSession}
             onDiscardWorkout={handleDiscardWorkout}
             onDiscardExercise={handleDiscardExercise}
+            onDeleteTemplate={(templateId) => {
+              const previousTemplates = templates;
+              setTemplates(previousTemplates.filter(t => t.id !== templateId));
+              const success = deleteTemplate(templateId);
+              if (!success) {
+                setTemplates(previousTemplates);
+                toast.error('Unable to delete workout.');
+              }
+            }}
           />
         )}
 
@@ -1578,12 +1747,8 @@ export default function App() {
               startedAt={workout.startedAt || workout.startTime}
               endedAt={workout.endedAt || workout.endTime}
               onEnsureStartedAt={() => {
-                // Idempotent: only set if missing
-                if (workout.startedAt) return;
-                const startedAt = workout.startTime || Date.now();
-                setWorkouts(prev =>
-                  prev.map(w => (w.id === workout.id ? { ...w, startedAt } : w))
-                );
+                // Do NOT start timer here - timer starts when first set is logged
+                // This callback is kept for compatibility but does nothing
               }}
               onBack={() => setScreen({ type: 'home' })}
               onAddExercise={(name, pairWithExerciseId, swapWithExerciseId, swapGroupId) => {
@@ -1596,14 +1761,21 @@ export default function App() {
               onCompleteExercise={(exerciseId) => completeExercise(workout.id, exerciseId)}
               onCompleteGroup={(exerciseIds) => completeGroupInWorkout(workout.id, exerciseIds)}
               onSkipExercise={(exerciseId) => skipExercise(workout.id, exerciseId)}
+              onSkipExerciseInGroup={(exerciseId) => skipExerciseInGroup(workout.id, exerciseId)}
+              onUnskipExerciseInGroup={(exerciseId) => unskipExerciseInGroup(workout.id, exerciseId)}
               onDeferExercise={(exerciseId) => deferExercise(workout.id, exerciseId)}
+              onDeleteExercise={(exerciseId) => deleteExercise(workout.id, exerciseId)}
               onSwapExercise={(exerciseId, newExerciseName) => swapExercise(workout.id, exerciseId, newExerciseName)}
+              onSkipGroup={(exerciseIds) => skipGroup(workout.id, exerciseIds)}
+              onDeferGroup={(exerciseIds) => deferGroup(workout.id, exerciseIds)}
+              onDeleteGroup={(exerciseIds) => deleteGroup(workout.id, exerciseIds)}
               onReorderExercises={(newExercises) => reorderExercises(workout.id, newExercises)}
               onFinishWorkout={() => finishWorkout(workout.id)}
               onGroupExercises={(instanceIds) => groupExercisesInWorkout(workout.id, instanceIds)}
               onAddToGroup={(groupId, instanceId) => addToGroupInWorkout(workout.id, groupId, instanceId)}
               onMergeGroups={(groupId1, groupId2) => mergeGroupsInWorkout(workout.id, groupId1, groupId2)}
               onUngroup={(instanceId) => ungroupExerciseInWorkout(workout.id, instanceId)}
+              onUngroupGroup={(groupId) => ungroupGroupInWorkout(workout.id, groupId)}
               onSwapGroupMember={(groupId, sourceMemberInstanceId, replacementInstanceId) => swapGroupMemberInWorkout(workout.id, groupId, sourceMemberInstanceId, replacementInstanceId)}
             />
           );
@@ -1621,25 +1793,20 @@ export default function App() {
               startedAt={incompleteExerciseSession?.startedAt || incompleteExerciseSession?.startTime}
               endedAt={incompleteExerciseSession?.endedAt || incompleteExerciseSession?.endTime}
               onEnsureStartedAt={() => {
-                if (incompleteExerciseSession?.startedAt) return;
-                const startedAt = incompleteExerciseSession?.startTime || Date.now();
-                setIncompleteExerciseSession(prev => {
-                  if (!prev) {
-                    return {
-                      exerciseName: screen.exerciseName,
-                      sets: exerciseSessionSets,
-                      startTime: startedAt,
-                      startedAt,
-                      lastSetAt: incompleteExerciseSession?.lastSetAt,
-                    };
-                  }
-                  return { ...prev, startTime: prev.startTime || startedAt, startedAt };
-                });
+                // Do NOT start timer here - timer starts when first set is logged
+                // This callback is kept for compatibility but does nothing
               }}
               lastSetAt={incompleteExerciseSession?.lastSetAt}
               onBack={handleExerciseSessionBack}
               onAddSet={(weight, reps, restDuration) => {
                 const now = Date.now();
+                const isFirstSet = exerciseSessionSets.length === 0;
+                
+                // Start timer if this is the first set
+                if (isFirstSet) {
+                  beginFirstExerciseLog();
+                }
+                
                 setExerciseSessionSets([...exerciseSessionSets, {
                   id: now.toString(),
                   weight,
@@ -1971,16 +2138,14 @@ export default function App() {
               // Exercise is already removed from session in StartLoggingScreen
               // This callback can be used for analytics or other side effects
             }}
-            onEnterSession={() => {
-              if (adHocSession) {
-                // Ensure startedAt is set/persisted before entering the session screen
-                if (!adHocSession.startedAt) {
-                  const startedAt = adHocSession.startTime || Date.now();
-                  setAdHocSession({ ...adHocSession, startedAt, startTime: adHocSession.startTime || startedAt });
+              onEnterSession={() => {
+                if (adHocSession) {
+                  // Start timer immediately when user confirms exercise selection by tapping "Log"
+                  // This is the final confirmation step - timer must start here
+                  beginFirstExerciseLog();
+                  setScreen({ type: 'ad-hoc-session', sessionId: adHocSession.id });
                 }
-                setScreen({ type: 'ad-hoc-session', sessionId: adHocSession.id });
-              }
-            }}
+              }}
             onUpdateSession={(session) => setAdHocSession(session)}
           />
         )}
@@ -2002,6 +2167,7 @@ export default function App() {
               name: ex.name,
               sets: ex.sets,
               isComplete: ex.isComplete || false,
+              isSkipped: ex.isSkipped,
               groupId: ex.groupId || null,
             }));
 
@@ -2020,14 +2186,11 @@ export default function App() {
               exercises={exercises}
               lastSessionData={lastSessionData}
               allWorkouts={workouts}
-              startedAt={session.startedAt || session.startTime}
+              startedAt={session.startedAt}
               endedAt={session.endedAt || session.endTime}
               onEnsureStartedAt={() => {
-                if (!adHocSession || adHocSession.id !== session.id) return;
-                if (adHocSession.startedAt) return;
-                const startedAt = adHocSession.startTime || Date.now();
-                const updated: AdHocLoggingSession = { ...adHocSession, startedAt, startTime: adHocSession.startTime || startedAt };
-                setAdHocSession(updated);
+                // Do NOT start timer here - timer starts when first set is logged
+                // This callback is kept for compatibility but does nothing
               }}
               onBack={() => setScreen({ type: 'start-logging' })}
               onAddExercise={(name: string, pairWithExerciseId?: string, swapWithExerciseId?: string, swapGroupId?: string) => {
@@ -2123,6 +2286,13 @@ export default function App() {
               onAddSet={(exerciseId, weight, reps, restDuration) => {
                 const now = Date.now();
                 const exercise = session.exercises.find(ex => ex.id === exerciseId);
+                const isFirstSet = session.exercises.every(ex => ex.sets.length === 0);
+                
+                // Start timer if this is the first set in the session
+                if (isFirstSet) {
+                  beginFirstExerciseLog();
+                }
+                
                 const updatedSession: AdHocLoggingSession = {
                   ...session,
                   exercises: session.exercises.map(ex => {
@@ -2276,7 +2446,7 @@ export default function App() {
                 setAdHocSession(updatedSession);
               }}
               onSkipExercise={(exerciseId) => {
-                // Skip exercise - mark as complete
+                // Skip standalone exercise - mark as complete
                 const updatedSession: AdHocLoggingSession = {
                   ...session,
                   exercises: session.exercises.map(ex => {
@@ -2285,6 +2455,24 @@ export default function App() {
                     }
                     return ex;
                   }),
+                };
+                setAdHocSession(updatedSession);
+              }}
+              onSkipExerciseInGroup={(exerciseId) => {
+                const updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exercises: session.exercises.map(ex =>
+                    ex.id === exerciseId ? { ...ex, isSkipped: true } : ex
+                  ),
+                };
+                setAdHocSession(updatedSession);
+              }}
+              onUnskipExerciseInGroup={(exerciseId) => {
+                const updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exercises: session.exercises.map(ex =>
+                    ex.id === exerciseId ? { ...ex, isSkipped: false } : ex
+                  ),
                 };
                 setAdHocSession(updatedSession);
               }}
@@ -2361,6 +2549,36 @@ export default function App() {
               onUngroup={(instanceId) => {
                 const updatedExercises = ungroup(exercises, instanceId);
                 const updatedSession = applyGroupingToSession(session, updatedExercises);
+                setAdHocSession(updatedSession);
+              }}
+              onUngroupGroup={(groupId) => {
+                const updatedExercises = ungroupAll(exercises, groupId);
+                const updatedSession = applyGroupingToSession(session, updatedExercises);
+                setAdHocSession(updatedSession);
+              }}
+              onSkipGroup={(exerciseIds) => {
+                const updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exercises: session.exercises.map(ex =>
+                    exerciseIds.includes(ex.id) ? { ...ex, isComplete: true } : ex
+                  ),
+                };
+                setAdHocSession(updatedSession);
+              }}
+              onDeferGroup={(exerciseIds) => {
+                const otherIds = session.exerciseOrder.filter(id => !exerciseIds.includes(id));
+                const updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exerciseOrder: [...otherIds, ...exerciseIds],
+                };
+                setAdHocSession(updatedSession);
+              }}
+              onDeleteGroup={(exerciseIds) => {
+                const updatedSession: AdHocLoggingSession = {
+                  ...session,
+                  exerciseOrder: session.exerciseOrder.filter(id => !exerciseIds.includes(id)),
+                  exercises: session.exercises.filter(ex => !exerciseIds.includes(ex.id)),
+                };
                 setAdHocSession(updatedSession);
               }}
               onSwapGroupMember={(groupId, sourceMemberInstanceId, replacementInstanceId) => {

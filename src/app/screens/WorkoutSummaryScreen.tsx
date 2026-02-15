@@ -219,33 +219,46 @@ export function WorkoutSummaryScreen({
                             ? exercise.sets.reduce((sum, set) => sum + (set.weight ?? 0), 0) / exercise.sets.length
                             : 0;
 
+                          const isSkipped = !!exercise.isSkipped;
                           return (
-                            <div key={exercise.id} className="border-b border-border-subtle last:border-b-0 pb-4 last:pb-0">
+                            <div key={exercise.id} className={`border-b border-border-subtle last:border-b-0 pb-4 last:pb-0 ${isSkipped ? 'opacity-70' : ''}`}>
                               <div className="flex items-start justify-between mb-3">
-                                <h4 className="font-medium text-text-primary">{exercise.name}</h4>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <h4 className={`font-medium ${isSkipped ? 'text-text-muted' : 'text-text-primary'}`}>{exercise.name}</h4>
+                                  {isSkipped && (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-text-muted/20 text-text-muted text-xs font-medium">
+                                      Skipped
+                                    </span>
+                                  )}
+                                </div>
                               </div>
 
-                              {/* Sets */}
+                              {/* Sets - show placeholder when skipped with no sets */}
                               <div className="space-y-2 mb-3">
-                                {(() => {
-                                  const sortedSets = getSetsInDisplayOrder(exercise.sets);
-                                  return sortedSets.map((set, index) => (
-                                  <div
-                                    key={set.id}
-                                    className="flex items-center justify-between p-2 bg-surface rounded-lg"
-                                  >
-                                    <span className="text-text-muted text-sm">Set {index + 1}</span>
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-sm">{formatWeight(set.weight)}</span>
-                                      <span className="text-text-muted">×</span>
-                                      <span className="text-sm">{set.reps} reps</span>
+                                {exercise.sets.length === 0 && isSkipped ? (
+                                  <div className="p-2 bg-surface/50 rounded-lg text-text-muted text-sm">—</div>
+                                ) : (
+                                  (() => {
+                                    const sortedSets = getSetsInDisplayOrder(exercise.sets);
+                                    return sortedSets.map((set, index) => (
+                                    <div
+                                      key={set.id}
+                                      className="flex items-center justify-between p-2 bg-surface rounded-lg"
+                                    >
+                                      <span className="text-text-muted text-sm">Set {index + 1}</span>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm">{formatWeight(set.weight)}</span>
+                                        <span className="text-text-muted">×</span>
+                                        <span className="text-sm">{set.reps} reps</span>
+                                      </div>
                                     </div>
-                                  </div>
-                                  ));
-                                })()}
+                                    ));
+                                  })()
+                                )}
                               </div>
 
-                              {/* Stats */}
+                              {/* Stats - hide when skipped with no sets */}
+                              {!(isSkipped && exercise.sets.length === 0) && (
                               <div className="flex gap-4 text-text-muted">
                                 <div>
                                   <span className="text-xs uppercase tracking-wide">Total Volume</span>
@@ -256,6 +269,7 @@ export function WorkoutSummaryScreen({
                                   <p className="text-text-primary text-sm">{formatWeight(avgWeight)}</p>
                                 </div>
                               </div>
+                              )}
                             </div>
                           );
                         })}

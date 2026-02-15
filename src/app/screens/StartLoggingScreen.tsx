@@ -74,7 +74,7 @@ export function StartLoggingScreen({
       status: 'active',
       exerciseOrder: [],
       exercises: [],
-      startTime: now,
+      // Do NOT set startTime here - timer starts only when first set is logged
     };
 
     const updatedSession: AdHocLoggingSession = {
