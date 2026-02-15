@@ -11,10 +11,9 @@ import { HistoryScreen } from './screens/HistoryScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { BackupsAndDataScreen } from './screens/BackupsAndDataScreen';
 import { StartLoggingScreen } from './screens/StartLoggingScreen';
+import { ExerciseSearchScreen } from './screens/ExerciseSearchScreen';
 import { Banner } from './components/Banner';
 import { Modal } from './components/Modal';
-import { ExerciseSearchBottomSheet } from './components/ExerciseSearchBottomSheet';
-import { LogExerciseSearch } from './components/LogExerciseSearch';
 import { SessionConflictModal } from './components/SessionConflictModal';
 import { Input } from './components/Input';
 import { Button } from './components/Button';
@@ -56,7 +55,8 @@ export default function App() {
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
   const [incompleteExerciseSession, setIncompleteExerciseSession] = useState<IncompleteExerciseSession | null>(null);
   const [adHocSession, setAdHocSession] = useState<AdHocLoggingSession | null>(null);
-  
+  const [stateHydrated, setStateHydrated] = useState(false);
+
   // Initialize app state on mount
   useEffect(() => {
     const result = loadState();
@@ -73,11 +73,23 @@ export default function App() {
         rawData: result.rawData,
       });
     }
+    setStateHydrated(true);
   }, []);
   
   const [screen, setScreen] = useState<AppScreen>({ type: 'home' });
   const [banner, setBanner] = useState<{ message: string; variant: 'info' | 'warning' | 'error' } | null>(null);
   const [showLogExercise, setShowLogExercise] = useState(false);
+  const [exerciseSearchOverlay, setExerciseSearchOverlay] = useState<{
+    title: string;
+    onSelect: (name: string) => void;
+    onBack: () => void;
+    selectedExercises?: string[];
+    onAddNewExercise?: (name: string) => void;
+    inSessionExercises?: string[];
+    mode?: 'ADD_TO_SESSION' | 'PICK_PAIR_TARGET' | 'SWAP' | 'DEFAULT';
+    createButtonLabel?: string;
+    swapContext?: { originalExercise: { id: string; name: string; source: string; primaryMuscles?: string[]; secondaryMuscles?: string[]; equipment?: string[] } };
+  } | null>(null);
   const [exerciseName, setExerciseName] = useState('');
   const [exerciseSessionSets, setExerciseSessionSets] = useState<any[]>([]);
   const [showExerciseComplete, setShowExerciseComplete] = useState(false);
@@ -121,6 +133,37 @@ export default function App() {
     type: 'workout' | 'exercise';
     data: any;
   } | null>(null);
+
+  // Sync showLogExercise to exercise search overlay (for callers that still use setShowLogExercise)
+  useEffect(() => {
+    if (showLogExercise && !exerciseSearchOverlay) {
+      setShowLogExercise(false);
+      setExerciseSearchOverlay({
+        title: 'Log Exercise',
+        onSelect: (name) => {
+          handleLogExerciseFromModal(name);
+          setExerciseSearchOverlay(null);
+        },
+        onBack: () => setExerciseSearchOverlay(null),
+        onAddNewExercise: (name) => {
+          handleAddNewExerciseFromModal(name);
+          setExerciseSearchOverlay(null);
+        },
+        createButtonLabel: 'Create & start',
+      });
+    }
+  }, [showLogExercise]);
+
+  // Redirect ad-hoc-session to Home when session is invalid (avoids setState-during-render)
+  useEffect(() => {
+    if (screen.type === 'ad-hoc-session') {
+      const session = adHocSession;
+      const sessionId = screen.sessionId;
+      if (!session || session.id !== sessionId) {
+        setScreen({ type: 'home' });
+      }
+    }
+  }, [screen.type, screen.type === 'ad-hoc-session' ? screen.sessionId : undefined, adHocSession]);
 
   // Initialize exercise database on app startup
   useEffect(() => {
@@ -1372,7 +1415,19 @@ export default function App() {
     setShowExerciseComplete(false);
     setExerciseSessionSets([]);
     setIncompleteExerciseSession(null);
-    setShowLogExercise(true);
+    setExerciseSearchOverlay({
+      title: 'Log Exercise',
+      onSelect: (name) => {
+        handleLogExerciseFromModal(name);
+        setExerciseSearchOverlay(null);
+      },
+      onBack: () => setExerciseSearchOverlay(null),
+      onAddNewExercise: (name) => {
+        handleAddNewExerciseFromModal(name);
+        setExerciseSearchOverlay(null);
+      },
+      createButtonLabel: 'Create & start',
+    });
   };
 
   // Handle exercise session back - save as incomplete if sets exist
@@ -1461,18 +1516,36 @@ export default function App() {
   return (
     <div className="size-full flex flex-col bg-background">
       <Toaster position="bottom" richColors />
-      {/* Main content area with bottom padding for fixed nav (only when nav is visible) */}
-      <div className={`flex-1 overflow-hidden flex flex-col ${
+      {/* Main content area with bottom padding for fixed nav (only when nav visible and screen needs it).
+          Start-logging uses BottomStickyCTA for CTA spacing, so no pb-24 here. */}
+      <div className={`flex-1 min-h-0 overflow-hidden flex flex-col ${
         !(
           screen.type === 'create-template' ||
           screen.type === 'view-template' ||
           screen.type === 'workout-session' ||
           screen.type === 'workout-summary' ||
-          screen.type === 'exercise-session'
+          screen.type === 'exercise-session' ||
+          screen.type === 'start-logging'
         ) ? 'pb-24' : ''
       }`}>
 
         {screen.type === 'home' && (
+          !stateHydrated ? (
+            <div className="flex-1 overflow-y-auto" data-testid="home-loading-skeleton">
+              <div className="max-w-2xl mx-auto p-5 space-y-6">
+                <div className="pt-4 pb-2 flex items-start justify-between animate-pulse">
+                  <div className="h-14 w-14 rounded-2xl bg-surface" />
+                  <div className="flex-1 ml-4 space-y-2">
+                    <div className="h-8 w-48 bg-surface rounded" />
+                    <div className="h-4 w-32 bg-surface rounded" />
+                  </div>
+                </div>
+                <div className="h-24 bg-surface rounded-xl animate-pulse" />
+                <div className="h-24 bg-surface rounded-xl animate-pulse" />
+                <div className="h-24 bg-surface rounded-xl animate-pulse" />
+              </div>
+            </div>
+          ) : (
           <HomeScreen
             unfinishedWorkout={unfinishedWorkout}
             incompleteExerciseSession={incompleteExerciseSession}
@@ -1522,7 +1595,18 @@ export default function App() {
                 toast.error('Unable to delete workout.');
               }
             }}
+            onReload={import.meta.env.DEV ? () => {
+              const result = loadState();
+              if (result.success && result.state) {
+                setWorkouts(result.state.workouts || []);
+                setTemplates(result.state.templates || []);
+                setIncompleteExerciseSession(result.state.incompleteExerciseSession ?? null);
+                setAdHocSession(result.state.adHocSession ?? null);
+                setStateHydrated(true);
+              }
+            } : undefined}
           />
+        )
         )}
 
         {screen.type === 'create-template' && (
@@ -1846,7 +1930,19 @@ export default function App() {
 
         {screen.type === 'workout-summary' && (() => {
           const workout = workouts.find(w => w.id === screen.workoutId);
-          if (!workout) return null;
+          if (!workout) {
+            return (
+              <div className="flex flex-col h-full items-center justify-center p-5">
+                <div className="text-center space-y-4 max-w-md">
+                  <p className="text-text-primary text-lg mb-2">Workout not found</p>
+                  <p className="text-text-muted mb-6">The workout may have been deleted or is no longer available.</p>
+                  <Button variant="primary" onClick={() => setScreen({ type: 'home' })}>
+                    Go Home
+                  </Button>
+                </div>
+              </div>
+            );
+          }
           const isFromHistory = screen.previousScreen?.type === 'history';
           const isJustCompletedMulti =
             !!screen.isJustCompleted && !screen.isSingleExercise && workout.exercises.length >= 2;
@@ -2138,12 +2234,12 @@ export default function App() {
               // Exercise is already removed from session in StartLoggingScreen
               // This callback can be used for analytics or other side effects
             }}
-              onEnterSession={() => {
-                if (adHocSession) {
-                  // Start timer immediately when user confirms exercise selection by tapping "Log"
-                  // This is the final confirmation step - timer must start here
+              onEnterSession={(sessionOverride) => {
+                const s = sessionOverride ?? adHocSession;
+                if (s) {
+                  if (sessionOverride) setAdHocSession(sessionOverride);
                   beginFirstExerciseLog();
-                  setScreen({ type: 'ad-hoc-session', sessionId: adHocSession.id });
+                  setScreen({ type: 'ad-hoc-session', sessionId: s.id });
                 }
               }}
             onUpdateSession={(session) => setAdHocSession(session)}
@@ -2153,9 +2249,15 @@ export default function App() {
         {screen.type === 'ad-hoc-session' && (() => {
           const session = adHocSession;
           if (!session || session.id !== screen.sessionId) {
-            // Session not found, go back to start-logging
-            setScreen({ type: 'start-logging' });
-            return null;
+            // Session not found or stale - useEffect will redirect to Home; show skeleton meanwhile
+            return (
+              <div className="flex flex-col h-full items-center justify-center p-5" data-testid="ad-hoc-session-fallback">
+                <div className="text-center space-y-4 max-w-md">
+                  <p className="text-text-muted">Loading...</p>
+                  <div className="h-8 w-32 bg-surface rounded animate-pulse mx-auto" />
+                </div>
+              </div>
+            );
           }
 
           // Convert session exercises to Workout format for WorkoutSessionScreen
@@ -2192,7 +2294,7 @@ export default function App() {
                 // Do NOT start timer here - timer starts when first set is logged
                 // This callback is kept for compatibility but does nothing
               }}
-              onBack={() => setScreen({ type: 'start-logging' })}
+              onBack={() => setScreen({ type: 'home' })}
               onAddExercise={(name: string, pairWithExerciseId?: string, swapWithExerciseId?: string, swapGroupId?: string) => {
                 // Add exercise to session
                 const exercise = getAllExercisesList().find(
@@ -2638,7 +2740,7 @@ export default function App() {
         })()}
       </div>
 
-      {/* Bottom nav bar - hide during workout and exercise flows */}
+      {/* Bottom nav bar - hide during workout, exercise, and search flows */}
       {!(
         screen.type === 'create-template' ||
         screen.type === 'view-template' ||
@@ -2647,8 +2749,9 @@ export default function App() {
         screen.type === 'exercise-session' ||
         screen.type === 'settings' ||
         screen.type === 'backups-and-data' ||
+        screen.type === 'ad-hoc-session' ||
         screen.type === 'start-logging' ||
-        screen.type === 'ad-hoc-session'
+        exerciseSearchOverlay != null
       ) && (
         <nav className="fixed bottom-0 left-0 right-0 pb-6 pt-4 px-4 z-50">
           <div className="max-w-md mx-auto">
@@ -2688,20 +2791,28 @@ export default function App() {
         </nav>
       )}
 
-      {/* Modals */}
-      <ExerciseSearchBottomSheet
-        isOpen={showLogExercise}
-        onClose={() => {
-          setShowLogExercise(false);
-          setExerciseName('');
-        }}
-        title="Log Exercise"
-      >
-        <LogExerciseSearch
-          onSelectExercise={handleLogExerciseFromModal}
-          onAddNewExercise={handleAddNewExerciseFromModal}
-        />
-      </ExerciseSearchBottomSheet>
+      {/* Full-screen exercise search overlay (replaces Log Exercise modal) */}
+      {exerciseSearchOverlay && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-panel">
+          <ExerciseSearchScreen
+            title={exerciseSearchOverlay.title}
+            onBack={() => {
+              exerciseSearchOverlay.onBack();
+              setExerciseSearchOverlay(null);
+            }}
+            onSelectExercise={(name) => {
+              exerciseSearchOverlay.onSelect(name);
+            }}
+            onAddNewExercise={exerciseSearchOverlay.onAddNewExercise}
+            selectedExercises={exerciseSearchOverlay.selectedExercises}
+            inSessionExercises={exerciseSearchOverlay.inSessionExercises}
+            mode={exerciseSearchOverlay.mode}
+            createButtonLabel={exerciseSearchOverlay.createButtonLabel}
+            swapContext={exerciseSearchOverlay.swapContext}
+          />
+        </div>
+      )}
+
 
       <Modal
         isOpen={showFinishConfirm}

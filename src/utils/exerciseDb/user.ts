@@ -34,12 +34,14 @@ export function loadUserExercises(): UserExercise[] {
 
 /**
  * Save user exercises to localStorage
+ * @throws Re-throws storage errors (e.g. QuotaExceeded) so callers can show user feedback
  */
 export function saveUserExercises(exercises: UserExercise[]): void {
   try {
     localStorage.setItem(USER_EXERCISES_KEY, JSON.stringify(exercises));
   } catch (error) {
     console.error('[ExerciseDB] Error saving user exercises:', error);
+    throw error;
   }
 }
 

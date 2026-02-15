@@ -79,7 +79,7 @@ export function ExerciseCardLogger({
 
   return (
     <>
-      <div className={`rounded-xl border p-4 space-y-3 transition-opacity ${isSkipped ? 'bg-surface/30 border-border-subtle/50 opacity-70' : 'bg-surface/50 border-border-subtle'}`}>
+      <div className={`rounded-xl border p-3 space-y-2 transition-opacity ${isSkipped ? 'bg-surface/30 border-border-subtle/50 opacity-70' : 'bg-surface/50 border-border-subtle'}`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 flex-wrap">
             <h3 className={`font-medium ${isSkipped ? 'text-text-muted' : 'text-text-primary'}`}>{exercise.name}</h3>
@@ -112,11 +112,11 @@ export function ExerciseCardLogger({
       {/* Inputs - disabled/placeholder when skipped */}
       {isSkipped ? (
         <div className="grid grid-cols-2 gap-3">
-          <div className="bg-surface/30 rounded-xl p-4 border border-border-subtle/50">
+          <div className="bg-surface/30 rounded-xl p-3 border border-border-subtle/50">
             <span className="block text-xs uppercase tracking-wider text-text-muted/70 mb-2 font-medium">Weight</span>
             <span className="text-2xl font-bold tabular-nums text-text-muted/70">—</span>
           </div>
-          <div className="bg-surface/30 rounded-xl p-4 border border-border-subtle/50">
+          <div className="bg-surface/30 rounded-xl p-3 border border-border-subtle/50">
             <span className="block text-xs uppercase tracking-wider text-text-muted/70 mb-2 font-medium">Reps</span>
             <span className="text-2xl font-bold tabular-nums text-text-muted/70">—</span>
           </div>

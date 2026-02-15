@@ -4,16 +4,15 @@ import { TopBar } from '../components/TopBar';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { Modal } from '../components/Modal';
-import { ExerciseSearchBottomSheet } from '../components/ExerciseSearchBottomSheet';
+import { ExerciseSearchScreen } from './ExerciseSearchScreen';
 import { Pill } from '../components/Pill';
 import { PersistentBottomSheet } from '../components/PersistentBottomSheet';
-import { PairWithSheet } from '../components/PairWithSheet';
+import { PairWithScreen } from './PairWithScreen';
 import { SupersetBlock } from '../components/SupersetBlock';
-import { SwapExerciseSheet } from '../components/SwapExerciseSheet';
-import { RemoveExerciseSheet } from '../components/RemoveExerciseSheet';
+import { SwapExerciseScreen } from './SwapExerciseScreen';
+import { RemoveExerciseScreen } from './RemoveExerciseScreen';
 import { Exercise, Set, Workout } from '../types';
 import { formatRelativeTime, getRecentSessionsForExercise } from '../utils/storage';
-import { ExerciseSearch } from '../components/ExerciseSearch';
 import { getAllExercisesList } from '../../utils/exerciseDb';
 import { formatWeight, formatWeightForDisplay, convertKgToDisplay, convertDisplayToKg } from '../../utils/weightFormat';
 import { getGroupInfo, filterGroupedMembers, buildSessionItems, SessionItem } from '../utils/exerciseGrouping';
@@ -1150,7 +1149,7 @@ export function WorkoutSessionScreen({
           onAddToGroup={() => {
             setActiveGroupIdForManagement(groupId);
             setShowPairAnother(true);
-            // Set focus to first member of group for PairWithSheet
+            // Set focus to first member of group for PairWithScreen
             const firstMember = exercises.find(ex => ex.groupId === groupId);
             if (firstMember) {
               setInteractionFocusExerciseId(firstMember.id);
@@ -1212,7 +1211,7 @@ export function WorkoutSessionScreen({
       if (!exercise) return null;
 
       return (
-        <div className="bg-surface rounded-2xl border border-border-subtle p-6 space-y-4">
+        <div className="bg-surface rounded-2xl border border-border-subtle p-4 space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-semibold">{exercise.name}</h2>
             {!exercise.isComplete && (
@@ -1380,6 +1379,186 @@ export function WorkoutSessionScreen({
   const slotCount = sessionItems.length;
   const workoutTitle = (startedAt && slotCount > 1) ? formatWorkoutTitle(startedAt) : undefined;
 
+  // Full-screen search overlays (replace former bottom sheets)
+  if (showAddExercise) {
+    return (
+      <ExerciseSearchScreen
+        title="Add Exercise"
+        onBack={() => setShowAddExercise(false)}
+        onSelectExercise={handleAddExerciseFromModal}
+        onAddNewExercise={handleAddNewExercise}
+        selectedExercises={[]}
+        inSessionExercises={exercises.map(ex => ex.name)}
+        mode="ADD_TO_SESSION"
+        placeholder="Search exercises..."
+        autoFocus={true}
+        showDetails={true}
+        createButtonLabel="Create & add"
+      />
+    );
+  }
+
+  if (showSwapExercise && focusExercise) {
+    const swapContext = (() => {
+      const allExercises = getAllExercisesList();
+      const dbExercise = allExercises.find(ex => ex.name === focusExercise.name);
+      if (dbExercise) {
+        return { originalExercise: dbExercise };
+      }
+      return {
+        originalExercise: {
+          id: focusExercise.id,
+          name: focusExercise.name,
+          source: 'user' as const,
+          primaryMuscles: [],
+          secondaryMuscles: [],
+          equipment: [],
+        },
+      };
+    })();
+    return (
+      <ExerciseSearchScreen
+        title={`Swap "${focusExercise.name}"`}
+        onBack={() => setShowSwapExercise(false)}
+        onSelectExercise={handleSwapExercise}
+        onAddNewExercise={handleSwapExercise}
+        placeholder="Search for replacement..."
+        autoFocus={true}
+        showDetails={true}
+        createButtonLabel="Swap"
+        mode="SWAP"
+        swapContext={swapContext}
+      />
+    );
+  }
+
+  if (showPairWith && focusExercise && onGroupExercises) {
+    return (
+      <PairWithScreen
+        onBack={() => {
+          setShowPairWith(false);
+          if (progressionExercise) {
+            setInteractionFocusExerciseId(progressionExercise.id);
+          }
+        }}
+        activeExercise={focusExercise}
+        allExercises={exercises}
+        onSelectExercise={(exerciseId) => {
+          const selectedExercise = exercises.find(ex => ex.id === exerciseId);
+          if (!selectedExercise) return;
+          const activeGroupInfo = getGroupInfo(exercises, focusExercise.id);
+          const selectedGroupInfo = getGroupInfo(exercises, exerciseId);
+          if (!activeGroupInfo.groupId && !selectedGroupInfo.groupId) {
+            onGroupExercises([focusExercise.id, exerciseId]);
+          } else if (activeGroupInfo.groupId && !selectedGroupInfo.groupId) {
+            onAddToGroup?.(activeGroupInfo.groupId, exerciseId);
+          } else if (!activeGroupInfo.groupId && selectedGroupInfo.groupId) {
+            onAddToGroup?.(selectedGroupInfo.groupId, focusExercise.id);
+          } else if (activeGroupInfo.groupId && selectedGroupInfo.groupId && activeGroupInfo.groupId !== selectedGroupInfo.groupId) {
+            onMergeGroups?.(activeGroupInfo.groupId, selectedGroupInfo.groupId);
+          }
+        }}
+        onAddNewExerciseAndPair={(exerciseName) => {
+          if (focusExercise) {
+            onAddExercise(exerciseName, focusExercise.id);
+          } else {
+            onAddExercise(exerciseName);
+          }
+        }}
+      />
+    );
+  }
+
+  if (showPairAnother && activeGroupIdForManagement && focusExercise) {
+    return (
+      <PairWithScreen
+        onBack={() => {
+          setShowPairAnother(false);
+          setActiveGroupIdForManagement(null);
+        }}
+        activeExercise={focusExercise}
+        allExercises={exercises}
+        onSelectExercise={(exerciseId) => {
+          if (onAddToGroup && activeGroupIdForManagement) {
+            onAddToGroup(activeGroupIdForManagement, exerciseId);
+          }
+          setShowPairAnother(false);
+          setActiveGroupIdForManagement(null);
+        }}
+        onAddNewExerciseAndPair={(exerciseName) => {
+          if (activeGroupIdForManagement) {
+            onAddExercise(exerciseName, activeGroupIdForManagement);
+          }
+          setShowPairAnother(false);
+          setActiveGroupIdForManagement(null);
+        }}
+      />
+    );
+  }
+
+  if (showSwapExerciseInSuperset && activeGroupIdForManagement) {
+    return (
+      <SwapExerciseScreen
+        onBack={() => {
+          setShowSwapExerciseInSuperset(false);
+          setActiveGroupIdForManagement(null);
+          setExerciseToSwapId(null);
+        }}
+        groupMembers={exercises.filter(ex => ex.groupId === activeGroupIdForManagement)}
+        allExercises={exercises}
+        initialExerciseToReplace={exerciseToSwapId || undefined}
+        onSwapWithExisting={(exerciseIdToReplace, replacementExerciseId) => {
+          const replacement = exercises.find(ex => ex.id === replacementExerciseId);
+          if (replacement?.groupId) {
+            console.warn('[SwapExercise] Replacement is already in a group', {
+              replacementExerciseId,
+              existingGroupId: replacement.groupId,
+            });
+            return;
+          }
+          onSwapGroupMember?.(activeGroupIdForManagement, exerciseIdToReplace, replacementExerciseId);
+          setShowSwapExerciseInSuperset(false);
+          setActiveGroupIdForManagement(null);
+          setExerciseToSwapId(null);
+        }}
+        onAddNewExerciseAndSwap={(exerciseIdToReplace, newExerciseName) => {
+          onAddExercise(newExerciseName, undefined, exerciseIdToReplace, activeGroupIdForManagement);
+          setShowSwapExerciseInSuperset(false);
+          setActiveGroupIdForManagement(null);
+          setExerciseToSwapId(null);
+        }}
+      />
+    );
+  }
+
+  if (showRemoveExercise && activeGroupIdForManagement) {
+    const removeGroupMembers = exercises.filter(ex => ex.groupId === activeGroupIdForManagement);
+    return (
+      <RemoveExerciseScreen
+        onBack={() => {
+          setShowRemoveExercise(false);
+          setActiveGroupIdForManagement(null);
+        }}
+        groupMembers={removeGroupMembers}
+        onConfirm={(exerciseIdsToRemove) => {
+          exerciseIdsToRemove.forEach(exerciseId => {
+            onUngroup?.(exerciseId);
+          });
+          const remainingMembers = exercises.filter(
+            ex => ex.groupId === activeGroupIdForManagement && !exerciseIdsToRemove.includes(ex.id)
+          );
+          if (remainingMembers.length < 2) {
+            remainingMembers.forEach(member => {
+              onUngroup?.(member.id);
+            });
+          }
+          setShowRemoveExercise(false);
+          setActiveGroupIdForManagement(null);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="h-screen flex flex-col bg-panel">
       <TopBar
@@ -1414,24 +1593,6 @@ export function WorkoutSessionScreen({
           renderControlsSection={renderControlsSection}
         />
       )}
-
-      {/* Add Exercise Bottom Sheet */}
-      <ExerciseSearchBottomSheet
-        isOpen={showAddExercise}
-        onClose={() => {
-          setShowAddExercise(false);
-        }}
-        title="Add Exercise"
-      >
-        <ExerciseSearch
-          onSelectExercise={handleAddExerciseFromModal}
-          onAddNewExercise={handleAddNewExercise}
-          placeholder="Search exercises..."
-          autoFocus={true}
-          showDetails={true}
-          createButtonLabel="Create & add"
-        />
-      </ExerciseSearchBottomSheet>
 
       {/* Exercise History Modal */}
       {focusExercise && (
@@ -1487,172 +1648,6 @@ export function WorkoutSessionScreen({
             })()}
           </div>
         </Modal>
-      )}
-
-      {/* Pair With Bottom Sheet */}
-      {focusExercise && onGroupExercises && (
-        <PairWithSheet
-          isOpen={showPairWith}
-          onClose={() => {
-            setShowPairWith(false);
-            // Restore focus to progression exercise after closing
-            if (progressionExercise) {
-              setInteractionFocusExerciseId(progressionExercise.id);
-            }
-          }}
-          activeExercise={focusExercise}
-          allExercises={exercises}
-          onSelectExercise={(exerciseId) => {
-            const selectedExercise = exercises.find(ex => ex.id === exerciseId);
-            if (!selectedExercise) return;
-            
-            const activeGroupInfo = getGroupInfo(exercises, focusExercise.id);
-            const selectedGroupInfo = getGroupInfo(exercises, exerciseId);
-            
-            if (!activeGroupInfo.groupId && !selectedGroupInfo.groupId) {
-              // Neither is grouped - create new group
-              if (onGroupExercises) {
-                onGroupExercises([focusExercise.id, exerciseId]);
-              }
-            } else if (activeGroupInfo.groupId && !selectedGroupInfo.groupId) {
-              // Active is grouped, selected is not - add to group
-              if (onAddToGroup) {
-                onAddToGroup(activeGroupInfo.groupId, exerciseId);
-              }
-            } else if (!activeGroupInfo.groupId && selectedGroupInfo.groupId) {
-              // Selected is grouped, active is not - add to group
-              if (onAddToGroup) {
-                onAddToGroup(selectedGroupInfo.groupId, focusExercise.id);
-              }
-            } else if (activeGroupInfo.groupId && selectedGroupInfo.groupId) {
-              // Both are grouped - merge groups
-              if (onMergeGroups && activeGroupInfo.groupId !== selectedGroupInfo.groupId) {
-                onMergeGroups(activeGroupInfo.groupId, selectedGroupInfo.groupId);
-              }
-            }
-          }}
-          onAddNewExerciseAndPair={(exerciseName) => {
-            // Add exercise and pair it with the active exercise
-            if (focusExercise) {
-              onAddExercise(exerciseName, focusExercise.id);
-            } else {
-              onAddExercise(exerciseName);
-            }
-          }}
-        />
-      )}
-
-      {/* Swap Exercise Bottom Sheet */}
-      {focusExercise && (
-        <ExerciseSearchBottomSheet
-          isOpen={showSwapExercise}
-          onClose={() => setShowSwapExercise(false)}
-          title={`Swap "${focusExercise.name}"`}
-        >
-          <ExerciseSearch
-            onSelectExercise={(exerciseName) => {
-              handleSwapExercise(exerciseName);
-            }}
-            onAddNewExercise={(name) => {
-              handleSwapExercise(name);
-            }}
-            placeholder="Search for replacement..."
-            autoFocus={true}
-            showDetails={true}
-            createButtonLabel="Swap"
-            swapContext={(() => {
-              // Find the exercise in the DB to get full metadata
-              const allExercises = getAllExercisesList();
-              const dbExercise = allExercises.find(ex => ex.name === focusExercise.name);
-              if (dbExercise) {
-                return { originalExercise: dbExercise };
-              }
-              // Fallback: create a minimal exercise object from the workout exercise
-              return {
-                originalExercise: {
-                  id: focusExercise.id,
-                  name: focusExercise.name,
-                  source: 'user' as const,
-                  primaryMuscles: [],
-                  secondaryMuscles: [],
-                  equipment: [],
-                },
-              };
-            })()}
-          />
-        </ExerciseSearchBottomSheet>
-      )}
-
-      {/* Pair Another Sheet for Superset */}
-      {activeGroupIdForManagement && focusExercise && (
-        <PairWithSheet
-          isOpen={showPairAnother}
-          onClose={() => {
-            setShowPairAnother(false);
-            setActiveGroupIdForManagement(null);
-          }}
-          activeExercise={focusExercise}
-          allExercises={exercises}
-          onSelectExercise={(exerciseId) => {
-            if (onAddToGroup && activeGroupIdForManagement) {
-              onAddToGroup(activeGroupIdForManagement, exerciseId);
-            }
-            setShowPairAnother(false);
-            setActiveGroupIdForManagement(null);
-          }}
-          onAddNewExerciseAndPair={(exerciseName) => {
-            if (activeGroupIdForManagement) {
-              onAddExercise(exerciseName, activeGroupIdForManagement);
-            }
-            setShowPairAnother(false);
-            setActiveGroupIdForManagement(null);
-          }}
-        />
-      )}
-
-      {/* Swap Exercise in Superset Sheet */}
-      {activeGroupIdForManagement && (
-        <SwapExerciseSheet
-          isOpen={showSwapExerciseInSuperset}
-          onClose={() => {
-            setShowSwapExerciseInSuperset(false);
-            setActiveGroupIdForManagement(null);
-            setExerciseToSwapId(null);
-          }}
-          groupMembers={exercises.filter(ex => ex.groupId === activeGroupIdForManagement)}
-          allExercises={exercises}
-          initialExerciseToReplace={exerciseToSwapId || undefined}
-          onSwapWithExisting={(exerciseIdToReplace, replacementExerciseId) => {
-            // Check if replacement is already grouped
-            const replacement = exercises.find(ex => ex.id === replacementExerciseId);
-            if (replacement && replacement.groupId) {
-              // Show error - replacement is already in a group
-              // TODO: Show toast/error message "Already in a group"
-              console.warn('[SwapExercise] Replacement is already in a group', {
-                replacementExerciseId,
-                existingGroupId: replacement.groupId,
-              });
-              return; // Don't proceed with swap
-            }
-            
-            // Use dedicated swap function
-            if (onSwapGroupMember && activeGroupIdForManagement && exerciseIdToReplace) {
-              onSwapGroupMember(activeGroupIdForManagement, exerciseIdToReplace, replacementExerciseId);
-            }
-            setShowSwapExerciseInSuperset(false);
-            setActiveGroupIdForManagement(null);
-            setExerciseToSwapId(null);
-          }}
-          onAddNewExerciseAndSwap={(exerciseIdToReplace, newExerciseName) => {
-            // Add new exercise and swap it in atomically
-            if (activeGroupIdForManagement && exerciseIdToReplace) {
-              onAddExercise(newExerciseName, undefined, exerciseIdToReplace, activeGroupIdForManagement);
-            }
-            setShowSwapExerciseInSuperset(false);
-            setActiveGroupIdForManagement(null);
-            setExerciseToSwapId(null);
-          }}
-        />
       )}
 
       {/* Standalone exercise overflow bottom sheet */}
@@ -1781,42 +1776,6 @@ export function WorkoutSessionScreen({
           />
         );
       })()}
-
-      {/* Remove Exercise from Superset Sheet */}
-      {activeGroupIdForManagement && (
-        <RemoveExerciseSheet
-          isOpen={showRemoveExercise}
-          onClose={() => {
-            setShowRemoveExercise(false);
-            setActiveGroupIdForManagement(null);
-          }}
-          groupMembers={exercises.filter(ex => ex.groupId === activeGroupIdForManagement)}
-          onConfirm={(exerciseIdsToRemove) => {
-            exerciseIdsToRemove.forEach(exerciseId => {
-              if (onUngroup) {
-                onUngroup(exerciseId);
-              }
-            });
-            
-            // Check if group should be dissolved
-            const remainingMembers = exercises.filter(
-              ex => ex.groupId === activeGroupIdForManagement && !exerciseIdsToRemove.includes(ex.id)
-            );
-            
-            if (remainingMembers.length < 2) {
-              // Dissolve group - ungroup remaining member
-              remainingMembers.forEach(member => {
-                if (onUngroup) {
-                  onUngroup(member.id);
-                }
-              });
-            }
-            
-            setShowRemoveExercise(false);
-            setActiveGroupIdForManagement(null);
-          }}
-        />
-      )}
 
       {/* Exercise History Bottom Sheet */}
       {historyExerciseName && (

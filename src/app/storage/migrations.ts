@@ -153,11 +153,42 @@ export function getCurrentSchemaVersion(): number {
 }
 
 /**
+ * Migrate v1 schema from import (has data in schema) to v2.
+ * Used when importing JSON that has schemaVersion: 1 and data.
+ */
+function migrate_v1_import_to_v2(schema: { data: any }): StorageSchema {
+  const data = schema.data;
+  const workouts = Array.isArray(data?.workouts) ? data.workouts : [];
+  const templates = Array.isArray(data?.templates) ? data.templates : [];
+  const migratedWorkouts = workouts.map((w: any) => {
+    const startedAt = typeof w.startedAt === 'number' ? w.startedAt : (typeof w.startTime === 'number' ? w.startTime : Date.now());
+    const endedAt = typeof w.endedAt === 'number' ? w.endedAt : (typeof w.endTime === 'number' ? w.endTime : undefined);
+    const durationSec =
+      typeof w.durationSec === 'number'
+        ? w.durationSec
+        : endedAt
+          ? computeDurationSec(startedAt, endedAt)
+          : undefined;
+    return { ...w, startedAt, endedAt, durationSec };
+  });
+  return {
+    schemaVersion: 2,
+    data: {
+      workouts: migratedWorkouts,
+      templates,
+      incompleteExerciseSession: data?.incompleteExerciseSession ?? null,
+      incompleteWorkoutId: data?.incompleteWorkoutId ?? null,
+      adHocSession: data?.adHocSession ?? null,
+    },
+  };
+}
+
+/**
  * Run migrations sequentially from current version to target version
  */
 export function migrateSchema(schema: StorageSchema | null, targetVersion: number = CURRENT_SCHEMA_VERSION): StorageSchema {
   if (!schema || !schema.schemaVersion) {
-    // No schema version = v1 (legacy)
+    // No schema version = v1 (legacy) - load from localStorage
     schema = migrate_v1_to_v2(null);
   }
 
@@ -166,10 +197,13 @@ export function migrateSchema(schema: StorageSchema | null, targetVersion: numbe
   // Run migrations sequentially
   while (currentVersion < targetVersion) {
     if (currentVersion === 1) {
-      schema = migrate_v1_to_v2(null);
+      // If schema has data (from import), use it; else load from localStorage
+      schema =
+        schema.data != null
+          ? migrate_v1_import_to_v2(schema as { data: any })
+          : migrate_v1_to_v2(null);
       currentVersion = 2;
     } else {
-      // No more migrations defined yet
       break;
     }
   }

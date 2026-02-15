@@ -1,10 +1,20 @@
 import { useState, useRef } from 'react';
-import { Download, Upload, Trash2, ChevronLeft } from 'lucide-react';
+import { Download, Upload, Trash2, FileUp } from 'lucide-react';
+import { toast } from 'sonner';
 import { TopBar } from '../components/TopBar';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { CompactBottomSheet } from '../components/CompactBottomSheet';
-import { exportData, importData, clearAllData } from '../storage/storageGateway';
+import { Modal } from '../components/Modal';
+import { ImportPreviewSheet } from '../components/ImportPreviewSheet';
+import {
+  exportData,
+  importData,
+  clearAllData,
+  parseImportFile,
+  type ImportPreview,
+} from '../storage/storageGateway';
+import { setLastImportTimestamp } from '../../utils/preferences';
 
 interface BackupsAndDataScreenProps {
   onBack: () => void;
@@ -14,12 +24,15 @@ interface BackupsAndDataScreenProps {
 
 export function BackupsAndDataScreen({ onBack, onDataImported, onDataDeleted }: BackupsAndDataScreenProps) {
   const [showImport, setShowImport] = useState(false);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [importText, setImportText] = useState('');
+  const [showPreview, setShowPreview] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
-  const [isHoldingDelete, setIsHoldingDelete] = useState(false);
-  const deleteHoldTimeoutRef = useRef<number | null>(null);
-  const deleteHoldStartRef = useRef<number | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [pendingImportJson, setPendingImportJson] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [showPasteDev, setShowPasteDev] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const handleExport = () => {
     try {
@@ -35,52 +48,75 @@ export function BackupsAndDataScreen({ onBack, onDataImported, onDataDeleted }: 
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Failed to export data:', err);
-      alert('Failed to export data. Please check the console for details.');
+      toast.error('Failed to export data');
     }
   };
 
-  const handleImport = () => {
-    if (!importText.trim()) {
-      setImportError('Please paste JSON data to import');
-      return;
-    }
+  const handleChooseFile = () => {
+    setImportError(null);
+    fileInputRef.current?.click();
+  };
 
-    const result = importData(importText);
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = reader.result as string;
+      const result = parseImportFile(text);
+      if (result.success && result.preview && result.state) {
+        setImportPreview(result.preview);
+        setPendingImportJson(text);
+        setImportError(null);
+        setShowImport(false);
+        setShowPreview(true);
+      } else {
+        setImportError(result.error || 'Failed to parse file');
+      }
+    };
+    reader.onerror = () => {
+      setImportError('Failed to read file');
+    };
+    reader.readAsText(file, 'utf-8');
+  };
+
+  const handleImportConfirm = (mode: 'merge' | 'replace') => {
+    if (!pendingImportJson) return;
+    setIsImporting(true);
+    const result = importData(pendingImportJson, mode);
+    setIsImporting(false);
     if (result.success) {
-      setImportError(null);
-      setImportText('');
-      setShowImport(false);
+      setLastImportTimestamp(Date.now());
+      setShowPreview(false);
+      setPendingImportJson(null);
+      setImportPreview(null);
+      toast.success('Data imported successfully');
       if (onDataImported) {
         onDataImported();
       }
-      alert('Data imported successfully!');
     } else {
-      setImportError(result.error || 'Failed to import data');
+      toast.error(result.error || 'Import failed');
     }
   };
 
-  const handleDeleteHoldStart = () => {
-    setIsHoldingDelete(true);
-    const startTime = Date.now();
-    deleteHoldStartRef.current = startTime;
-    
-    // Require 2 seconds of holding
-    deleteHoldTimeoutRef.current = window.setTimeout(() => {
-      // Check if we're still holding and enough time has passed
-      if (deleteHoldStartRef.current && Date.now() - deleteHoldStartRef.current >= 2000) {
-        setShowDeleteConfirm(true);
-        setIsHoldingDelete(false);
-      }
-    }, 2000);
-  };
-
-  const handleDeleteHoldEnd = () => {
-    setIsHoldingDelete(false);
-    if (deleteHoldTimeoutRef.current) {
-      clearTimeout(deleteHoldTimeoutRef.current);
-      deleteHoldTimeoutRef.current = null;
+  const handlePasteImport = () => {
+    if (!pasteText.trim()) {
+      setImportError('Please paste JSON data');
+      return;
     }
-    deleteHoldStartRef.current = null;
+    const result = parseImportFile(pasteText);
+    if (result.success && result.preview && result.state) {
+      setImportPreview(result.preview);
+      setPendingImportJson(pasteText);
+      setImportError(null);
+      setShowPasteDev(false);
+      setPasteText('');
+      setShowPreview(true);
+    } else {
+      setImportError(result.error || 'Failed to parse');
+    }
   };
 
   const handleDeleteConfirm = () => {
@@ -90,10 +126,9 @@ export function BackupsAndDataScreen({ onBack, onDataImported, onDataDeleted }: 
       if (onDataDeleted) {
         onDataDeleted();
       }
-      // Return to settings after deletion
       onBack();
     } else {
-      alert(`Failed to delete data: ${result.error || 'Unknown error'}`);
+      toast.error(result.error || 'Failed to delete data');
     }
   };
 
@@ -131,41 +166,24 @@ export function BackupsAndDataScreen({ onBack, onDataImported, onDataDeleted }: 
                   Import data
                 </h3>
                 <p className="text-sm text-text-muted">
-                  Restore workouts and history from a backup.
+                  Restore workouts and history from a backup file.
                 </p>
               </div>
             </div>
           </Card>
 
           {/* Delete Data Card */}
-          <Card 
-            onMouseDown={handleDeleteHoldStart}
-            onMouseUp={handleDeleteHoldEnd}
-            onMouseLeave={handleDeleteHoldEnd}
-            onTouchStart={handleDeleteHoldStart}
-            onTouchEnd={handleDeleteHoldEnd}
-            className={`cursor-pointer transition-colors ${
-              isHoldingDelete ? 'bg-danger/10 border-danger/30' : ''
-            }`}
-          >
+          <Card onClick={() => setShowDeleteConfirm(true)} className="cursor-pointer">
             <div className="flex items-start gap-4">
-              <div className={`p-2 rounded-lg transition-colors ${
-                isHoldingDelete ? 'bg-danger/20' : 'bg-surface'
-              }`}>
-                <Trash2 className={`w-5 h-5 transition-colors ${
-                  isHoldingDelete ? 'text-danger' : 'text-text-primary'
-                }`} />
+              <div className="p-2 bg-surface rounded-lg">
+                <Trash2 className="w-5 h-5 text-text-primary" />
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className={`text-base font-medium mb-1 transition-colors ${
-                  isHoldingDelete ? 'text-danger' : 'text-text-primary'
-                }`}>
+                <h3 className="text-base font-medium text-text-primary mb-1">
                   Delete data
                 </h3>
                 <p className="text-sm text-text-muted">
-                  {isHoldingDelete 
-                    ? 'Keep holding to confirm...' 
-                    : 'Remove all workouts and history from this device.'}
+                  Remove all workouts and history from this device.
                 </p>
               </div>
             </div>
@@ -173,80 +191,113 @@ export function BackupsAndDataScreen({ onBack, onDataImported, onDataDeleted }: 
         </div>
       </div>
 
-      {/* Import Bottom Sheet */}
+      {/* Import: Choose file */}
       <CompactBottomSheet
         isOpen={showImport}
         onClose={() => {
           setShowImport(false);
-          setImportText('');
           setImportError(null);
         }}
         title="Import backup"
       >
         <div className="space-y-4">
-          <textarea
-            value={importText}
-            onChange={(e) => {
-              setImportText(e.target.value);
-              setImportError(null);
-            }}
-            placeholder="Paste JSON backup data here..."
-            className="w-full h-32 p-3 bg-surface border border-border-subtle rounded-lg text-sm font-mono resize-none"
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            onChange={handleFileChange}
+            className="hidden"
           />
+          <Button
+            variant="primary"
+            onClick={handleChooseFile}
+            className="w-full"
+          >
+            <FileUp className="w-4 h-4 mr-2 inline" />
+            Choose file
+          </Button>
+          <p className="text-xs text-text-muted">
+            Select a .json backup file exported from Training Ledger.
+          </p>
           {importError && (
             <p className="text-sm text-danger">{importError}</p>
           )}
-          <div className="flex gap-2">
-            <Button
-              variant="primary"
-              onClick={handleImport}
-              className="flex-1"
-              disabled={!importText.trim()}
-            >
-              Import
-            </Button>
-            <Button
-              variant="neutral"
-              onClick={() => {
-                setShowImport(false);
-                setImportText('');
-                setImportError(null);
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
+          {import.meta.env.DEV && (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowPasteDev(!showPasteDev)}
+                className="text-xs text-text-muted underline"
+              >
+                {showPasteDev ? 'Hide' : 'Show'} paste JSON (dev)
+              </button>
+              {showPasteDev && (
+                <div className="space-y-2 pt-2 border-t border-border-subtle">
+                  <textarea
+                    value={pasteText}
+                    onChange={(e) => {
+                      setPasteText(e.target.value);
+                      setImportError(null);
+                    }}
+                    placeholder="Paste JSON..."
+                    className="w-full h-24 p-3 bg-surface border border-border-subtle rounded-lg text-sm font-mono resize-none"
+                  />
+                  <Button variant="neutral" onClick={handlePasteImport} className="w-full">
+                    Parse & preview
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+          <Button
+            variant="neutral"
+            onClick={() => {
+              setShowImport(false);
+              setImportError(null);
+            }}
+            className="w-full"
+          >
+            Cancel
+          </Button>
         </div>
       </CompactBottomSheet>
 
-      {/* Delete Confirmation Bottom Sheet */}
-      <CompactBottomSheet
+      {/* Import preview */}
+      {importPreview && (
+        <ImportPreviewSheet
+          isOpen={showPreview}
+          onClose={() => {
+            setShowPreview(false);
+            setPendingImportJson(null);
+            setImportPreview(null);
+          }}
+          preview={importPreview}
+          onImport={handleImportConfirm}
+          isImporting={isImporting}
+        />
+      )}
+
+      {/* Delete Confirmation Modal */}
+      <Modal
         isOpen={showDeleteConfirm}
         onClose={() => setShowDeleteConfirm(false)}
         title="Delete all data?"
-      >
-        <div className="space-y-4">
-          <p className="text-sm text-text-muted">
-            This removes workouts and history from this device. This can't be undone.
-          </p>
-          <div className="flex gap-2">
-            <Button
-              variant="danger"
-              onClick={handleDeleteConfirm}
-              className="flex-1"
-            >
+        actions={
+          <>
+            <Button variant="neutral" onClick={() => setShowDeleteConfirm(false)} className="flex-1">
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={handleDeleteConfirm} className="flex-1">
               <Trash2 className="w-4 h-4 mr-2 inline" />
               Delete
             </Button>
-            <Button
-              variant="neutral"
-              onClick={() => setShowDeleteConfirm(false)}
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      </CompactBottomSheet>
+          </>
+        }
+      >
+        <p className="text-text-muted">
+          This removes workouts and history from this device. This can't be undone.
+        </p>
+      </Modal>
     </div>
   );
 }

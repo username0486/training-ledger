@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Sun, Moon, ChevronRight } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { SegmentedToggle } from '../components/SegmentedToggle';
-import { getAppearance, getUnitSystem, setAppearance, setUnitSystem, Appearance, UnitSystem } from '../../utils/preferences';
+import { getAppearance, getUnitSystem, setAppearance, setUnitSystem, getLastImportTimestamp, Appearance, UnitSystem } from '../../utils/preferences';
 
 interface SettingsScreenProps {
   theme: 'light' | 'dark';
@@ -12,9 +12,22 @@ interface SettingsScreenProps {
   onNavigateToBackups: () => void;
 }
 
+function formatLastImport(ts: number): string {
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days < 7) return `${days}d ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
 export function SettingsScreen({ theme, onThemeChange, onUnitChange, onBack, onNavigateToBackups }: SettingsScreenProps) {
   const [currentAppearance, setCurrentAppearance] = useState<Appearance>(theme);
   const [currentUnit, setCurrentUnit] = useState<UnitSystem>(getUnitSystem());
+  const lastImport = getLastImportTimestamp();
 
   // Sync with preferences on mount
   useEffect(() => {
@@ -122,7 +135,11 @@ export function SettingsScreen({ theme, onThemeChange, onUnitChange, onBack, onN
                   <div className="flex items-center gap-3">
                     <span className="text-base text-text-primary">Backups & data</span>
                   </div>
-                  <p className="text-xs text-text-muted mt-0.5">Import, export, delete</p>
+                  <p className="text-xs text-text-muted mt-0.5">
+                    {lastImport
+                      ? `Import, export, delete · Last import ${formatLastImport(lastImport)}`
+                      : 'Import, export, delete'}
+                  </p>
                 </div>
                 <ChevronRight className="w-4 h-4 text-text-muted flex-shrink-0 ml-2" />
               </button>

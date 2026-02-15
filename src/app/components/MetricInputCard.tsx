@@ -31,7 +31,7 @@ export const MetricInputCard = forwardRef<HTMLInputElement, MetricInputCardProps
     className = ''
   }, ref) => {
     return (
-      <div className={`bg-surface rounded-xl p-4 border border-border-subtle hover:border-accent/30 transition-all ${className}`}>
+      <div className={`bg-surface rounded-xl p-3 border border-border-subtle hover:border-accent/30 transition-all ${className}`}>
         <label className="block text-xs uppercase tracking-wider text-text-muted mb-2 font-medium">
           {label}
         </label>

@@ -4,11 +4,13 @@ interface TopBarProps {
   title?: string;
   onBack?: () => void;
   rightAction?: React.ReactNode;
+  /** When true, omits the bottom border (e.g. when search input follows directly below). */
+  hideBorder?: boolean;
 }
 
-export function TopBar({ title, onBack, rightAction }: TopBarProps) {
+export function TopBar({ title, onBack, rightAction, hideBorder }: TopBarProps) {
   return (
-    <div className="flex items-center justify-between px-5 py-4 border-b border-border-subtle bg-panel/80 backdrop-blur-sm sticky top-0 z-10">
+    <div className={`flex items-center justify-between px-5 py-4 bg-panel/80 backdrop-blur-sm sticky top-0 z-10 ${hideBorder ? '' : 'border-b border-border-subtle'}`}>
       <div className="flex items-center gap-3 min-w-0 flex-1">
         {onBack && (
           <button
