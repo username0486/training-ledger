@@ -223,7 +223,7 @@ export function SupersetBlock({
   const showRestTimer = restOwnerId === groupId && !allComplete && hasAnySets;
 
   return (
-    <div className="bg-surface rounded-2xl border border-border-subtle px-4 py-6 space-y-4">
+    <div className="bg-surface rounded-2xl border border-border-subtle px-4 py-4 space-y-3">
       {/* Header */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">

@@ -205,6 +205,13 @@
 }
 
 @layer base {
+  /* Full viewport height chain so flex layouts (search screens, etc.) fill the screen */
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
   * {
     @apply border-border-subtle outline-ring/50;
   }

@@ -1,11 +1,13 @@
 {
   "name": "@figma/my-make-file",
   "private": true,
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "scripts": {
     "build": "vite build",
     "dev": "vite",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "validate:exercises": "node scripts/validate-system-exercises.mjs"
   },
   "dependencies": {
@@ -66,9 +68,15 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.1.12",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@vitejs/plugin-react": "4.7.0",
+    "jsdom": "^28.1.0",
     "tailwindcss": "4.1.12",
-    "vite": "6.3.5"
+    "vite": "6.3.5",
+    "vitest": "^4.0.18"
   },
   "peerDependencies": {
     "react": "18.3.1",

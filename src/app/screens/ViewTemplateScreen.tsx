@@ -5,8 +5,7 @@ import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { WorkoutTemplate } from '../types/templates';
 import { formatTimeAgo } from '../utils/storage';
-import { ExerciseSearchBottomSheet } from '../components/ExerciseSearchBottomSheet';
-import { ExerciseSearch } from '../components/ExerciseSearch';
+import { ExerciseSearchScreen } from './ExerciseSearchScreen';
 import { addExerciseToDb } from '../utils/exerciseDb';
 import { FloatingLabelInput } from '../components/FloatingLabelInput';
 import { Dumbbell } from 'lucide-react';
@@ -247,8 +246,43 @@ export function ViewTemplateScreen({
   const exerciseCount = isEditMode ? editedExercises.length : (template.exerciseNames?.length || 0);
   const durationEstimate = estimateWorkoutDuration(template.id, exerciseCount, completedWorkouts);
 
+  if (showAddExercise) {
+    return (
+      <ExerciseSearchScreen
+        title="Add Exercise"
+        onBack={() => setShowAddExercise(false)}
+        onSelectExercise={handleAddExercise}
+        onAddNewExercise={handleAddNewExercise}
+        selectedExercises={editedExercises}
+        placeholder="Search exercises..."
+        autoFocus={true}
+        showDetails={true}
+        createButtonLabel="Create & add"
+      />
+    );
+  }
+
+  if (showReplaceExercise && replaceIndex !== null) {
+    return (
+      <ExerciseSearchScreen
+        title="Replace Exercise"
+        onBack={() => {
+          setShowReplaceExercise(false);
+          setReplaceIndex(null);
+        }}
+        onSelectExercise={handleReplaceSelect}
+        onAddNewExercise={(name) => handleReplaceSelect(name)}
+        selectedExercises={editedExercises}
+        placeholder="Search exercises..."
+        autoFocus={true}
+        showDetails={true}
+        createButtonLabel="Replace"
+      />
+    );
+  }
+
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-1 flex-col min-h-0">
       <TopBar
         title={isEditMode ? editedName : template.name}
         onBack={isEditMode ? handleCancel : onBack}
@@ -394,7 +428,7 @@ export function ViewTemplateScreen({
       <div 
         className="fixed bottom-0 left-0 right-0 bg-panel border-t border-border-subtle px-5 pt-5 z-10"
         style={{
-          paddingBottom: `max(calc(1.25rem + env(safe-area-inset-bottom, 0px)), env(safe-area-inset-bottom, 0px))`,
+          paddingBottom: `max(calc(2.5rem + env(safe-area-inset-bottom, 0px)), env(safe-area-inset-bottom, 0px))`,
         }}
       >
         <div className="max-w-2xl mx-auto space-y-2">
@@ -444,44 +478,6 @@ export function ViewTemplateScreen({
           </Card>
         </div>
       )}
-
-      {/* Add Exercise Bottom Sheet */}
-      <ExerciseSearchBottomSheet
-        isOpen={showAddExercise}
-        onClose={() => setShowAddExercise(false)}
-        title="Add Exercise"
-      >
-        <ExerciseSearch
-          onSelectExercise={handleAddExercise}
-          onAddNewExercise={handleAddNewExercise}
-          selectedExercises={editedExercises}
-          placeholder="Search exercises..."
-          autoFocus={true}
-          showDetails={true}
-          createButtonLabel="Create & add"
-        />
-      </ExerciseSearchBottomSheet>
-
-      {/* Replace Exercise Bottom Sheet */}
-      <ExerciseSearchBottomSheet
-        isOpen={showReplaceExercise}
-        onClose={() => {
-          setShowReplaceExercise(false);
-          setReplaceIndex(null);
-        }}
-        title="Replace Exercise"
-      >
-        <ExerciseSearch
-          onSelectExercise={handleReplaceSelect}
-          onAddNewExercise={(name) => {
-            handleReplaceSelect(name);
-          }}
-          placeholder="Search exercises..."
-          autoFocus={true}
-          showDetails={true}
-          createButtonLabel="Replace"
-        />
-      </ExerciseSearchBottomSheet>
     </div>
   );
 }

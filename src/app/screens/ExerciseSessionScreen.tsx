@@ -128,7 +128,7 @@ export function ExerciseSessionScreen({
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto px-6 py-6 space-y-6">
           {/* Exercise Card */}
-          <div className="bg-surface rounded-2xl border border-border-subtle p-6 space-y-4">
+          <div className="bg-surface rounded-2xl border border-border-subtle p-4 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-semibold">{exerciseName}</h2>
             </div>

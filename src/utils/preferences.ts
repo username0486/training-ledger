@@ -11,6 +11,7 @@ const PREFERENCES_KEY = 'training-ledger-preferences';
 interface Preferences {
   unitSystem: UnitSystem;
   appearance: Appearance;
+  lastImportTimestamp?: number;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -29,6 +30,7 @@ export function loadPreferences(): Preferences {
       return {
         unitSystem: parsed.unitSystem || DEFAULT_PREFERENCES.unitSystem,
         appearance: parsed.appearance || DEFAULT_PREFERENCES.appearance,
+        lastImportTimestamp: parsed.lastImportTimestamp,
       };
     }
   } catch (error) {
@@ -76,5 +78,19 @@ export function setUnitSystem(unit: UnitSystem): void {
  */
 export function setAppearance(appearance: Appearance): void {
   savePreferences({ appearance });
+}
+
+/**
+ * Get last import timestamp (ms)
+ */
+export function getLastImportTimestamp(): number | undefined {
+  return loadPreferences().lastImportTimestamp;
+}
+
+/**
+ * Set last import timestamp
+ */
+export function setLastImportTimestamp(timestamp: number): void {
+  savePreferences({ lastImportTimestamp: timestamp });
 }
 

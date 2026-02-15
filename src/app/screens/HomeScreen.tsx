@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, ListPlus, Play, Database, Settings } from 'lucide-react';
+import { Plus, ListPlus, Play, Database, Settings, Trash2 } from 'lucide-react';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
@@ -32,6 +32,8 @@ interface HomeScreenProps {
   onDiscardAdHocSession: () => void;
   onOpenSettings: () => void;
   onDeleteTemplate?: (templateId: string) => void;
+  /** Dev-only: reload app state when data is inconsistent */
+  onReload?: () => void;
 }
 
 export function HomeScreen({
@@ -55,6 +57,7 @@ export function HomeScreen({
   onDiscardAdHocSession,
   onOpenSettings,
   onDeleteTemplate,
+  onReload,
 }: HomeScreenProps) {
 
   // Dev-only: Seed demo data
@@ -399,6 +402,16 @@ export function HomeScreen({
             </p>
           )}
         </Modal>
+
+        {/* Dev-only: Something went wrong fallback when data is inconsistent */}
+        {import.meta.env.DEV && onReload && (workoutTemplates === undefined || !Array.isArray(workoutTemplates)) && (
+          <div className="space-y-3 pt-4 border-t border-border-subtle">
+            <p className="text-sm text-warning">Something went wrong</p>
+            <Button variant="neutral" size="sm" onClick={onReload}>
+              Tap to reload
+            </Button>
+          </div>
+        )}
 
         {/* Dev-only: Seed demo data buttons */}
         {import.meta.env.DEV && (

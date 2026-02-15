@@ -1,12 +1,13 @@
 import { ExerciseDBEntry } from '../utils/exerciseDb';
 import { Check } from 'lucide-react';
 
-type ExerciseSearchMode = 'ADD_TO_SESSION' | 'PICK_PAIR_TARGET' | 'SWAP' | 'DEFAULT';
+type ExerciseSearchMode = 'ADD_TO_SESSION' | 'PICK_PAIR_TARGET' | 'SWAP' | 'DEFAULT' | 'MULTI_SELECT_TOGGLE';
 
 interface ExerciseListProps {
   exercises: ExerciseDBEntry[] | { best: ExerciseDBEntry[]; related?: ExerciseDBEntry[] };
   onSelect?: (exercise: ExerciseDBEntry) => void;
   selectedExercises?: string[]; // Exercises to disable (for ADD_TO_SESSION mode)
+  selectedExerciseIds?: Set<string>; // For MULTI_SELECT_TOGGLE: exercise IDs that are selected (tap toggles)
   inSessionExercises?: string[]; // Exercises in session (for display in PICK_PAIR_TARGET mode)
   mode?: ExerciseSearchMode;
   showDetails?: boolean;
@@ -19,6 +20,7 @@ export function ExerciseList({
   exercises,
   onSelect,
   selectedExercises = [],
+  selectedExerciseIds,
   inSessionExercises = [],
   mode = 'ADD_TO_SESSION',
   showDetails = false,
@@ -73,9 +75,11 @@ export function ExerciseList({
         const exerciseName = exercise.name || 'Unnamed Exercise';
         const exerciseId = exercise.id || `exercise-${Math.random()}`;
         const isInSession = inSessionExercises.includes(exerciseName);
-        // Only disable if in ADD_TO_SESSION mode and already selected
-        const isDisabled = mode === 'ADD_TO_SESSION' && selectedExercises.includes(exerciseName);
-        const isSelected = mode === 'ADD_TO_SESSION' && selectedExercises.includes(exerciseName);
+        const isToggleMode = mode === 'MULTI_SELECT_TOGGLE';
+        const isSelectedById = isToggleMode && selectedExerciseIds?.has(exerciseId);
+        // ADD_TO_SESSION: disable when selected; MULTI_SELECT_TOGGLE: never disable (tap toggles)
+        const isDisabled = !isToggleMode && mode === 'ADD_TO_SESSION' && selectedExercises.includes(exerciseName);
+        const isSelected = isToggleMode ? isSelectedById : (mode === 'ADD_TO_SESSION' && selectedExercises.includes(exerciseName));
         
         // Defensive: ensure arrays exist and are arrays
         // User exercises may have undefined fields, so default to empty arrays

@@ -48,7 +48,7 @@ export function DataRecoveryScreen({
       return;
     }
 
-    const result = importData(importText);
+    const result = importData(importText, 'replace');
     if (result.success) {
       setImportError(null);
       setImportText('');

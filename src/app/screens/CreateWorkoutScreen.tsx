@@ -4,8 +4,7 @@ import { TopBar } from '../components/TopBar';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { FloatingLabelInput } from '../components/FloatingLabelInput';
-import { ExerciseSearchBottomSheet } from '../components/ExerciseSearchBottomSheet';
-import { ExerciseSearch } from '../components/ExerciseSearch';
+import { ExerciseSearchScreen } from './ExerciseSearchScreen';
 import { addExerciseToDb } from '../utils/exerciseDb';
 
 interface CreateWorkoutScreenProps {
@@ -151,8 +150,24 @@ export function CreateWorkoutScreen({
 
   const canSave = workoutName.trim() !== '' && exercises.length > 0;
 
+  if (showAddExercise) {
+    return (
+      <ExerciseSearchScreen
+        title="Add Exercise"
+        onBack={() => setShowAddExercise(false)}
+        onSelectExercise={handleAddExercise}
+        onAddNewExercise={handleAddNewExercise}
+        selectedExercises={exercises}
+        placeholder="Search exercises..."
+        autoFocus={true}
+        showDetails={true}
+        createButtonLabel="Create & add"
+      />
+    );
+  }
+
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-1 flex-col min-h-0">
       <TopBar
         title="Create Workout"
         onBack={onDiscard}
@@ -241,25 +256,6 @@ export function CreateWorkoutScreen({
           )}
         </div>
       </div>
-
-      {/* Add Exercise Bottom Sheet */}
-      <ExerciseSearchBottomSheet
-        isOpen={showAddExercise}
-        onClose={() => {
-          setShowAddExercise(false);
-        }}
-        title="Add Exercise"
-      >
-        <ExerciseSearch
-          onSelectExercise={handleAddExercise}
-          onAddNewExercise={handleAddNewExercise}
-          selectedExercises={exercises}
-          placeholder="Search exercises..."
-          autoFocus={true}
-          showDetails={true}
-          createButtonLabel="Create & add"
-        />
-      </ExerciseSearchBottomSheet>
     </div>
   );
 }

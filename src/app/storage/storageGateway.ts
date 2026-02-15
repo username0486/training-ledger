@@ -1,6 +1,12 @@
 // Centralized storage gateway - all storage access goes through here
 import { StorageSchema, AppState, StorageLoadResult } from './types';
 import { migrateSchema, getCurrentSchemaVersion } from './migrations';
+import {
+  parseAndValidateImport,
+  mergeImportData,
+  type ImportPreview,
+  type ParseResult,
+} from './importHelpers';
 
 const STORAGE_KEY = 'training_ledger_app_state';
 
@@ -150,66 +156,66 @@ export function exportData(): string {
 }
 
 /**
- * Import data from JSON string
+ * Parse and validate import JSON. Returns preview + state or error.
  */
-export function importData(json: string): { success: boolean; error?: string; state?: AppState } {
-  try {
-    const parsed = JSON.parse(json);
+export function parseImportFile(json: string): ParseResult {
+  return parseAndValidateImport(json);
+}
 
-    if (typeof parsed !== 'object' || parsed === null) {
-      return {
-        success: false,
-        error: 'Imported data is not an object',
-      };
-    }
+export type { ImportPreview, ParseResult };
 
-    // Migrate if needed
-    let schema: StorageSchema;
-    try {
-      schema = migrateSchema(parsed, getCurrentSchemaVersion());
-    } catch (migrationError) {
-      return {
-        success: false,
-        error: `Migration failed: ${migrationError}`,
-      };
-    }
-
-    // Validate structure
-    if (!schema.data || typeof schema.data !== 'object') {
-      return {
-        success: false,
-        error: 'Imported data structure is invalid',
-      };
-    }
-
-    // Ensure arrays exist
-    const state: AppState = {
-      workouts: Array.isArray(schema.data.workouts) ? schema.data.workouts : [],
-      templates: Array.isArray(schema.data.templates) ? schema.data.templates : [],
-      incompleteExerciseSession: schema.data.incompleteExerciseSession ?? null,
-      incompleteWorkoutId: schema.data.incompleteWorkoutId ?? null,
-      adHocSession: schema.data.adHocSession ?? null,
-    };
-
-    // Save imported state
-    const saveResult = saveState(state);
-    if (!saveResult.success) {
-      return {
-        success: false,
-        error: saveResult.error || 'Failed to save imported data',
-      };
-    }
-
-    return {
-      success: true,
-      state,
-    };
-  } catch (error) {
+/**
+ * Import data: merge (dedupe by id, prefer newest) or replace.
+ */
+export function importData(
+  json: string,
+  mode: 'merge' | 'replace' = 'merge'
+): { success: boolean; error?: string; state?: AppState } {
+  const parseResult = parseAndValidateImport(json);
+  if (!parseResult.success || !parseResult.state) {
     return {
       success: false,
-      error: `Failed to import data: ${error}`,
+      error: parseResult.error || 'Failed to parse import data',
     };
   }
+
+  let stateToSave: AppState;
+  if (mode === 'replace') {
+    stateToSave = parseResult.state;
+  } else {
+    const existingResult = loadState();
+    const existing: AppState =
+      existingResult.success && existingResult.state
+        ? existingResult.state
+        : {
+            workouts: [],
+            templates: [],
+            incompleteExerciseSession: null,
+            incompleteWorkoutId: null,
+            adHocSession: null,
+          };
+    stateToSave = mergeImportData(parseResult.state, existing);
+  }
+
+  const saveResult = saveState(stateToSave);
+  if (!saveResult.success) {
+    return {
+      success: false,
+      error: saveResult.error || 'Failed to save imported data',
+    };
+  }
+
+  return {
+    success: true,
+    state: stateToSave,
+  };
+}
+
+/**
+ * Legacy: import from pasted JSON (replace mode, for backwards compat / dev).
+ */
+export function importDataFromPaste(json: string): { success: boolean; error?: string; state?: AppState } {
+  return importData(json, 'replace');
 }
 
 /**
