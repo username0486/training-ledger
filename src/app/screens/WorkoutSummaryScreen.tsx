@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Play, Trash2, Check, X, Edit2, MoreHorizontal, Save, Link2 } from 'lucide-react';
+import { Play, Trash2, Check, X, Edit2, MoreHorizontal, Save } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
@@ -10,6 +10,7 @@ import { Workout } from '../types';
 import { formatDate } from '../utils/storage';
 import { formatWeight } from '../../utils/weightFormat';
 import { buildSessionItems } from '../utils/exerciseGrouping';
+import { GroupLinkChip } from '../components/GroupLinkChip';
 import { formatDuration, getElapsedSec } from '../utils/duration';
 import { getSetsInDisplayOrder } from '../utils/setOrdering';
 
@@ -51,8 +52,9 @@ export function WorkoutSummaryScreen({
   const [showSaveWorkoutSheet, setShowSaveWorkoutSheet] = useState(false);
   const [saveWorkoutName, setSaveWorkoutName] = useState(workout.name);
 
-  // Build session items to group exercises
+  // Build session items to group exercises (active list only; replacedExercises shown separately)
   const sessionItems = useMemo(() => buildSessionItems(workout.exercises), [workout.exercises]);
+  const replacedExercises = workout.replacedExercises ?? [];
 
   const durationSec =
     typeof workout.durationSec === 'number'
@@ -140,7 +142,7 @@ export function WorkoutSummaryScreen({
         }
       />
 
-      <div className="flex-1 overflow-y-auto pb-24">
+      <div className="flex-1 overflow-x-hidden overflow-y-auto min-w-0 pb-24">
         <div className="max-w-2xl mx-auto p-5 space-y-6">
           {/* Workout info */}
           <div>
@@ -200,14 +202,7 @@ export function WorkoutSummaryScreen({
                 return (
                   <Card key={item.id} gradient>
                     <div className="mb-4">
-                      {/* Group indicator pill - muted blue, matches active session styling */}
-                      <span
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-accent/10 text-accent/70 border border-accent/20 text-xs mb-3"
-                        aria-label="Grouped exercises"
-                      >
-                        <Link2 className="w-3 h-3" aria-hidden="true" />
-                        <span className="uppercase">Group</span>
-                      </span>
+                      <GroupLinkChip childrenCount={itemExercises.length} className="mb-3" />
                       <div className="space-y-4">
                         {itemExercises.map((exercise) => {
                           const totalVolume = exercise.sets.reduce((sum, set) => {
@@ -351,6 +346,63 @@ export function WorkoutSummaryScreen({
               }
             })}
           </div>
+
+          {/* Replaced exercises (swapped out mid-session but had logged sets) */}
+          {replacedExercises.length > 0 && (
+            <div className="space-y-4">
+              <h3 className="text-sm font-medium uppercase tracking-wide text-text-muted">
+                Replaced (saved in summary)
+              </h3>
+              {replacedExercises.map((exercise) => {
+                const totalVolume = exercise.sets.reduce((sum, set) => {
+                  const weight = set.weight ?? 0;
+                  const reps = set.reps ?? 0;
+                  return sum + (weight * reps);
+                }, 0);
+                const avgWeight = exercise.sets.length > 0
+                  ? exercise.sets.reduce((sum, set) => sum + (set.weight ?? 0), 0) / exercise.sets.length
+                  : 0;
+                return (
+                  <Card key={exercise.id} gradient className="border-border-subtle">
+                    <div className="flex items-start justify-between mb-4">
+                      <h3 className="flex-1">{exercise.name}</h3>
+                      <span className="text-xs text-text-muted px-2 py-0.5 rounded-full bg-surface">
+                        Replaced
+                      </span>
+                    </div>
+                    <div className="space-y-2 mb-4">
+                      {(() => {
+                        const sortedSets = getSetsInDisplayOrder(exercise.sets);
+                        return sortedSets.map((set, index) => (
+                          <div
+                            key={set.id}
+                            className="flex items-center justify-between p-3 bg-surface rounded-lg"
+                          >
+                            <span className="text-text-muted">Set {index + 1}</span>
+                            <div className="flex items-center gap-2">
+                              <span>{formatWeight(set.weight)}</span>
+                              <span className="text-text-muted">×</span>
+                              <span>{set.reps} reps</span>
+                            </div>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                    <div className="flex gap-4 text-text-muted">
+                      <div>
+                        <span className="text-xs uppercase tracking-wide">Total Volume</span>
+                        <p className="text-text-primary">{formatWeight(totalVolume, 0)}</p>
+                      </div>
+                      <div>
+                        <span className="text-xs uppercase tracking-wide">Avg Weight</span>
+                        <p className="text-text-primary">{formatWeight(avgWeight)}</p>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 

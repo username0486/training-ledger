@@ -42,8 +42,8 @@ export function ExerciseSearchScreen({
   return (
     <div className="flex flex-1 flex-col min-h-0 bg-panel">
       <TopBar title={title} onBack={onBack} hideBorder />
-      <div className="flex-1 overflow-y-auto min-h-0">
-        <div className="p-5">
+      <div className="flex-1 overflow-x-hidden overflow-y-auto min-h-0 min-w-0">
+        <div className="px-5 pt-5 pb-safe">
           <ExerciseSearch
             onSelectExercise={onSelectExercise}
             onAddNewExercise={onAddNewExercise}

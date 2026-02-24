@@ -4,6 +4,7 @@
  */
 
 import { Exercise, AdHocLoggingSession } from '../types';
+import { getGroupDisplayLabel, getGroupSetLabel } from '../../components/drag/exerciseDnDUtils';
 
 /**
  * Generate a unique group ID
@@ -145,11 +146,10 @@ export function getGroupMembersOrdered(exercises: Exercise[], groupId: string): 
 }
 
 /**
- * Swap a group member with a replacement exercise
- * - Removes source member from group (preserves sets/history)
- * - Inserts replacement at the same position
- * - Maintains group size
- * - Ensures replacement is not already grouped
+ * Swap a group member with a replacement exercise (true replace-in-place).
+ * - Removes source member from the exercises list entirely (caller should add to replacedExercises if it had sets).
+ * - Inserts replacement at the same position in the group.
+ * - Ensures replacement is not already grouped.
  */
 export function swapGroupMember(
   exercises: Exercise[],
@@ -187,41 +187,29 @@ export function swapGroupMember(
       replacementInstanceId,
       existingGroupId: replacement.groupId,
     });
-    // Return unchanged - caller should show error message
     return exercises;
   }
   
-  // Remove source member from group (preserve sets/history)
-  const updated = exercises.map(ex => 
-    ex.id === sourceMemberInstanceId 
-      ? { ...ex, groupId: null } // Remove from group, return to standalone
-      : ex
-  );
+  // Remove source member entirely from the list (no ungroup; true replace)
+  const withoutSource = exercises.filter(ex => ex.id !== sourceMemberInstanceId);
   
-  // Add replacement to group at the same position
-  // First, find where the group starts in the full list
-  const firstGroupIndex = updated.findIndex(ex => {
-    if (ex.groupId !== groupId) return false;
-    // Find the first member that's still in the group (after removing source)
-    return ex.id !== sourceMemberInstanceId;
-  });
+  // Find where the group starts (first member after removing source)
+  const firstGroupIndex = withoutSource.findIndex(ex => ex.groupId === groupId);
   
   if (firstGroupIndex === -1) {
-    // Group is empty or invalid - shouldn't happen, but handle gracefully
     console.error('[swapGroupMember] Group not found after removing source member');
-    return updated;
+    return withoutSource;
   }
   
-  // Calculate target position: firstGroupIndex + sourceIndex
-  // But we need to account for the fact that source member is now ungrouped
+  // Target position: firstGroupIndex + sourceIndex
   const targetIndex = firstGroupIndex + sourceIndex;
   
-  // Find current position of replacement in the list
-  const replacementCurrentIndex = updated.findIndex(ex => ex.id === replacementInstanceId);
+  // Find current position of replacement in the list (without source)
+  const replacementCurrentIndex = withoutSource.findIndex(ex => ex.id === replacementInstanceId);
   
   // Remove replacement from current position
-  const replacementExercise = updated[replacementCurrentIndex];
-  const withoutReplacement = updated.filter((_, idx) => idx !== replacementCurrentIndex);
+  const replacementExercise = withoutSource[replacementCurrentIndex];
+  const withoutReplacement = withoutSource.filter((_, idx) => idx !== replacementCurrentIndex);
   
   // Insert replacement at target position with groupId
   const withReplacement = [
@@ -230,9 +218,39 @@ export function swapGroupMember(
     ...withoutReplacement.slice(targetIndex),
   ];
   
-  // Ensure group remains contiguous
   return ensureGroupContiguous(withReplacement, groupId);
 }
+
+/**
+ * Get 1-based group index from exercises array order (for display labels).
+ */
+export function getGroupIndexForExercises(exercises: Exercise[], groupId: string): number {
+  const seen = new Set<string>();
+  let idx = 0;
+  for (const ex of exercises) {
+    if (ex.groupId && !seen.has(ex.groupId)) {
+      seen.add(ex.groupId);
+      idx++;
+      if (ex.groupId === groupId) return idx;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Get group display label for session (Group 1, Group 2, etc.).
+ */
+export function getGroupLabelForSession(
+  exercises: Exercise[],
+  groupId: string
+): { displayLabel: string; subtitle: string } {
+  const members = getGroupExercises(exercises, groupId);
+  const groupIndex = getGroupIndexForExercises(exercises, groupId);
+  const { title, subtitle } = getGroupDisplayLabel(groupIndex, members.length);
+  return { displayLabel: title, subtitle };
+}
+
+export { getGroupSetLabel };
 
 /**
  * Get group information for an exercise
@@ -395,18 +413,22 @@ export function applyGroupingToSession(
     return session;
   }
 
+  // Filter out undefined/null entries defensively
+  const validExercisesArray = exercisesArray.filter((ex): ex is NonNullable<typeof ex> => ex != null);
+  const validSessionExercises = (session.exercises ?? []).filter((ex): ex is NonNullable<typeof ex> => ex != null);
+
   // Create a map of original session exercises to preserve metadata
-  const originalExerciseMap = new Map(session.exercises.map(ex => [ex.id, ex]));
-  
-  // Update exercises and maintain order
-  const exerciseMap = new Map(exercisesArray.map(ex => [ex.id, ex]));
-  const orderedExercises = session.exerciseOrder
+  const originalExerciseMap = new Map(validSessionExercises.map(ex => [ex.id, ex]));
+
+  // Update exercises and maintain order (only include ids that exist in updated exercises)
+  const exerciseMap = new Map(validExercisesArray.map(ex => [ex.id, ex]));
+  const orderedExercises = (session.exerciseOrder ?? [])
     .map(id => exerciseMap.get(id))
     .filter((ex): ex is NonNullable<typeof ex> => ex !== undefined);
   
   // Update groups map
   const groups: { [groupId: string]: { createdAt: number } } = session.groups || {};
-  exercisesArray.forEach(ex => {
+  validExercisesArray.forEach(ex => {
     if (ex.groupId && !groups[ex.groupId]) {
       groups[ex.groupId] = { createdAt: Date.now() };
     }
@@ -416,12 +438,12 @@ export function applyGroupingToSession(
   const reorderedExerciseOrder: string[] = [];
   const processedIds = new Set<string>();
   
-  exercisesArray.forEach(ex => {
+  validExercisesArray.forEach(ex => {
     if (processedIds.has(ex.id)) return;
-    
+
     if (ex.groupId) {
       // Add all exercises in the group together
-      const groupMembers = exercisesArray.filter(e => e.groupId === ex.groupId);
+      const groupMembers = validExercisesArray.filter(e => e.groupId === ex.groupId);
       groupMembers.forEach(member => {
         if (!processedIds.has(member.id)) {
           reorderedExerciseOrder.push(member.id);
@@ -435,22 +457,21 @@ export function applyGroupingToSession(
     }
   });
   
-  // Add any exercises that weren't in updatedExercises (shouldn't happen, but defensive)
-  session.exerciseOrder.forEach(id => {
-    if (!processedIds.has(id)) {
+  // Only add ids from session that exist in updated exercises (don't re-add swapped-out exercises)
+  (session.exerciseOrder ?? []).forEach(id => {
+    if (!processedIds.has(id) && exerciseMap.has(id)) {
       reorderedExerciseOrder.push(id);
     }
   });
   
-  return {
-    ...session,
-    exerciseOrder: reorderedExerciseOrder,
-    exercises: reorderedExerciseOrder.map(id => {
+  const exercises = reorderedExerciseOrder
+    .map(id => {
       const updatedEx = exerciseMap.get(id);
       const originalEx = originalExerciseMap.get(id);
-      if (!updatedEx || !originalEx) {
-        // Fallback - shouldn't happen
-        return originalEx || updatedEx as any;
+      if (!updatedEx) return null;
+      if (!originalEx) {
+        // New exercise (e.g. from add+swap) - use updatedEx, caller must have full format
+        return updatedEx as any;
       }
       return {
         ...originalEx,
@@ -458,7 +479,13 @@ export function applyGroupingToSession(
         isComplete: updatedEx.isComplete,
         groupId: updatedEx.groupId || null,
       };
-    }),
+    })
+    .filter((ex): ex is NonNullable<typeof ex> => ex != null);
+
+  return {
+    ...session,
+    exerciseOrder: reorderedExerciseOrder,
+    exercises,
     groups,
   };
 }

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { toast } from 'sonner';
 import { Check, Clock, X, MoreHorizontal, Link2, Unlink, ListEnd, SkipForward, Trash2 } from 'lucide-react';
+import { GroupLinkChip } from './GroupLinkChip';
 import { Exercise, Set, Workout } from '../types';
 import { ExerciseCardLogger } from './ExerciseCardLogger';
 import { Button } from './Button';
@@ -227,14 +228,7 @@ export function SupersetBlock({
       {/* Header */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          {/* Group indicator pill - muted blue, non-interactive */}
-          <span 
-            className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-accent/10 text-accent/70 border border-accent/20 text-xs"
-            aria-label={`${groupMembers.length} exercises in group`}
-          >
-            <Link2 className="w-3 h-3" aria-hidden="true" />
-            <span className="uppercase">{groupMembers.length} {groupMembers.length === 1 ? 'exercise' : 'exercises'}</span>
-          </span>
+          <GroupLinkChip childrenCount={groupMembers.length} />
           {(onAddToGroup || onUngroupGroup || onDeferGroup || onSkipGroup || onDeleteGroup) && (
             <button 
               onClick={() => setShowGroupOverflowSheet(true)}

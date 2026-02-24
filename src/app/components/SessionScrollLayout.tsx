@@ -1,5 +1,6 @@
 import { ReactNode, useRef, useEffect } from 'react';
 import { SessionItem } from '../utils/exerciseGrouping';
+import { CTA_BREATHING_ROOM_PX } from '../constants/layout';
 
 interface SessionScrollLayoutProps {
   items: SessionItem[];
@@ -100,9 +101,43 @@ export function SessionScrollLayout({
     });
   }, [activeItemId]);
 
+  // Force layout recalculation when active item changes (expand/collapse).
+  // Fixes stale content height when last card expands, preventing blank void below.
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    const forceLayoutRefresh = () => {
+      // Read scrollHeight to force layout; no-op scroll ensures scrollHeight is up to date
+      void el.scrollHeight;
+      el.scrollTop = el.scrollTop;
+    };
+
+    // Immediate: after paint
+    const rafId = requestAnimationFrame(() => {
+      requestAnimationFrame(forceLayoutRefresh);
+    });
+    // Delayed: for async layout (fonts, nested reflows)
+    const t = setTimeout(forceLayoutRefresh, 120);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      clearTimeout(t);
+    };
+  }, [activeItemId, items.length]);
+
+  // Bottom inset: safe area (home indicator) + breathing room. No large spacer.
+  const contentPaddingBottom = `calc(env(safe-area-inset-bottom, 0px) + ${CTA_BREATHING_ROOM_PX}px)`;
+
   return (
-    <div ref={scrollContainerRef} className={`flex-1 overflow-y-auto ${className}`}>
-      <div className="max-w-2xl mx-auto px-6 py-6 space-y-4">
+    <div
+      ref={scrollContainerRef}
+      className={`flex-1 min-h-0 overflow-x-hidden overflow-y-auto ${className}`}
+    >
+      <div
+        className="max-w-2xl mx-auto px-6 py-6 space-y-4"
+        style={{ paddingBottom: contentPaddingBottom }}
+      >
         {items.map((item) => {
           const isActive = item.id === activeItemId;
           
@@ -136,9 +171,6 @@ export function SessionScrollLayout({
             {renderControlsSection()}
           </div>
         )}
-        
-        {/* Tail spacer to allow last card to scroll to top */}
-        <div className="min-h-[70vh]" aria-hidden="true" />
       </div>
     </div>
   );

@@ -48,30 +48,37 @@ export function LastSessionStats({
 
   return (
     <div className="w-full bg-surface/30 rounded-lg border border-border-subtle p-3 space-y-2">
-      {/* Label row - tappable if onLabelPress is provided */}
+      {/* Label row - x ago and heaviest set comparison side by side */}
       {onLabelPress ? (
         <button
           onClick={onLabelPress}
-          className="w-full flex items-center justify-between text-left hover:opacity-80 transition-opacity"
+          className="w-full flex items-center justify-between gap-2 text-left hover:opacity-80 transition-opacity"
         >
-          <p className="text-xs text-text-muted">
-            {labelText}
-          </p>
+          <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
+            <p className="text-xs text-text-muted">
+              {labelText}
+            </p>
+            {comparisonFlag && (
+              <p className="text-xs text-text-muted/70">
+                {comparisonFlag}
+              </p>
+            )}
+          </div>
           {showChevron && (
             <ChevronRight className="w-4 h-4 text-text-muted flex-shrink-0" />
           )}
         </button>
       ) : (
-        <p className="text-xs text-text-muted">
-          {labelText}
-        </p>
-      )}
-      
-      {/* Comparison flag - shown below label if provided */}
-      {comparisonFlag && (
-        <p className="text-xs text-text-muted/70 -mt-2">
-          {comparisonFlag}
-        </p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="text-xs text-text-muted">
+            {labelText}
+          </p>
+          {comparisonFlag && (
+            <p className="text-xs text-text-muted/70">
+              {comparisonFlag}
+            </p>
+          )}
+        </div>
       )}
       
       {/* Pills */}

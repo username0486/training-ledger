@@ -12,7 +12,7 @@ interface RemoveExerciseScreenProps {
 }
 
 /**
- * Full-screen "Remove exercise from superset" flow.
+ * Full-screen "Remove exercise from group" flow.
  * Replaces RemoveExerciseSheet bottom sheet.
  */
 export function RemoveExerciseScreen({
@@ -51,12 +51,12 @@ export function RemoveExerciseScreen({
     <div className="flex flex-1 flex-col min-h-0 bg-panel">
       <TopBar title="Remove exercise" onBack={onBack} />
       <div
-        className="flex-1 overflow-y-auto min-h-0"
+        className="flex-1 overflow-x-hidden overflow-y-auto min-h-0 min-w-0"
         style={{ paddingBottom: resultsPaddingBottom }}
       >
         <div className="p-5 space-y-4">
           <p className="text-sm text-text-muted">
-            Select exercises to remove from the superset. At least one exercise must remain.
+            Select exercises to remove from the group. At least one exercise must remain.
           </p>
           <div className="space-y-2">
             {groupMembers.map((exercise) => {

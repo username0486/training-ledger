@@ -16,7 +16,7 @@ interface SwapExerciseScreenProps {
 }
 
 /**
- * Full-screen "Swap exercise in superset" flow.
+ * Full-screen "Swap exercise in group" flow.
  * Replaces SwapExerciseSheet bottom sheet.
  * Two steps: 1) Choose member to replace, 2) Search for replacement.
  */
@@ -48,10 +48,10 @@ export function SwapExerciseScreen({
     return (
       <div className="flex flex-1 flex-col min-h-0 bg-panel">
         <TopBar title="Swap exercise" onBack={handleClose} />
-        <div className="flex-1 overflow-y-auto min-h-0">
+        <div className="flex-1 overflow-x-hidden overflow-y-auto min-h-0 min-w-0">
           <div className="p-5 space-y-4">
             <p className="text-sm text-text-muted">
-              Choose an exercise to replace in the superset.
+              Choose an exercise to replace in the group.
             </p>
             <div className="space-y-2">
               {groupMembers.map((exercise) => (
@@ -126,7 +126,7 @@ export function SwapExerciseScreen({
         title={`Replace ${memberToReplace.name}`}
         onBack={() => setMemberToReplace(null)}
       />
-      <div className="flex-1 overflow-y-auto min-h-0">
+      <div className="flex-1 overflow-x-hidden overflow-y-auto min-h-0 min-w-0">
         <div className="p-5 space-y-4">
           {sessionExercisesForList.length > 0 && (
             <div>

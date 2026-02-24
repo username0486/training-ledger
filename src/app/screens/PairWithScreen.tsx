@@ -73,8 +73,8 @@ export function PairWithScreen({
   return (
     <div className="flex flex-1 flex-col min-h-0 bg-panel">
       <TopBar title="Pair with" onBack={onBack} />
-      <div className="flex-1 overflow-y-auto min-h-0">
-        <div className="p-5 space-y-4">
+      <div className="flex-1 overflow-x-hidden overflow-y-auto min-h-0 min-w-0">
+        <div className="px-5 pt-5 pb-safe space-y-4">
           {sessionExercisesForList.length > 0 && (
             <div>
               <div className="px-4 py-1">

@@ -281,4 +281,12 @@
   .animate-pulse-completed {
     animation: pulse-completed 1s ease-in-out;
   }
+
+  /**
+   * Minimal bottom padding for scroll containers on search pages (Add exercise, Pair with).
+   * Accounts for safe-area inset; no nav/footer on these screens.
+   */
+  .pb-safe {
+    padding-bottom: max(env(safe-area-inset-bottom, 0px), 1rem);
+  }
 }
