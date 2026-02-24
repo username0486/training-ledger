@@ -27,7 +27,7 @@ export function ProfileScreen({ user, theme, onBack, onLogOut, onThemeChange }: 
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-x-hidden overflow-y-auto min-w-0">
         <div className="max-w-2xl mx-auto px-5 py-6 space-y-6">
           {/* Profile Info */}
           <div className="bg-panel rounded-2xl border border-border-subtle p-5">

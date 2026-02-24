@@ -357,7 +357,7 @@ export function HistoryScreen({
         />
       )}
 
-      <div className="flex-1 overflow-y-auto" ref={scrollContainerRef}>
+      <div className="flex-1 overflow-x-hidden overflow-y-auto min-w-0" ref={scrollContainerRef}>
         <div className="max-w-2xl mx-auto p-5 space-y-4">
           {/* Header */}
           {!selectMode && (

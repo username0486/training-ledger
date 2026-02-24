@@ -40,26 +40,6 @@ export function StartLoggingScreen({
   // Selection state: ordered list, deduped by exerciseId
   const [selection, setSelection] = useState<SelectionItem[]>([]);
   const selectionIdsSet = useMemo(() => new Set(selection.map((s) => s.exerciseId)), [selection]);
-  const chipsScrollRef = useRef<HTMLDivElement>(null);
-  const [showChipsScroll, setShowChipsScroll] = useState(true);
-
-  // Only show horizontal scroll when overflow is substantial (> ~25% of a pill width)
-  useEffect(() => {
-    const el = chipsScrollRef.current;
-    if (!el || selection.length === 0) return;
-
-    const check = () => {
-      const overflow = el.scrollWidth - el.clientWidth;
-      const threshold = 28; // ~25% of typical pill width (80–120px)
-      setShowChipsScroll(overflow > threshold);
-    };
-
-    check();
-    const ro = new ResizeObserver(check);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [selection]);
-
   // Load all exercises on mount
   useEffect(() => {
     setAllExercises(getAllExercisesList());
@@ -196,11 +176,8 @@ export function StartLoggingScreen({
 
   const chipsRow =
     selection.length > 0 ? (
-      <div
-        ref={chipsScrollRef}
-        className={`py-2.5 px-5 bg-surface/30 ${showChipsScroll ? 'overflow-x-auto' : 'overflow-x-hidden'}`}
-      >
-        <div className="flex gap-1.5 min-w-min">
+      <div className="py-2.5 px-5 bg-surface/30 overflow-x-hidden">
+        <div className="flex flex-wrap gap-1.5">
           {selection.map((item) => (
             <Pill key={item.exerciseId} variant="accent" className="text-xs py-0.5 px-2 group flex-shrink-0">
               <span className="pr-1">{item.name}</span>

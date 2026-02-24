@@ -1,6 +1,28 @@
 @import './fonts.css';
 @import './tailwind.css';
+/* Height chain for full viewport: flex sizing propagates from viewport down */
 @import './theme.css';
+
+  height: 100%;
+/* Prevent horizontal scroll/wiggle across the app */
+html {
+  overflow-x: hidden;
+  width: 100%;
+  margin: 0;
+  height: 100%;
+}
+body {
+  height: 100%;
+  overflow-x: hidden;
+  width: 100%;
+  max-width: 100%; /* Avoid 100vw which can include scrollbar and cause overflow */
+  overflow-wrap: break-word; /* Prevent long unbroken strings from causing horizontal overflow */
+}
+#root {
+  overflow-x: hidden;
+  width: 100%;
+  min-width: 0; /* Allow flex children to shrink below content size */
+}
 
 /* Disable iOS shake-to-undo UI */
 /* Hide any undo/redo UI that might appear from system prompts */

@@ -21,6 +21,8 @@ export interface Workout {
   id: string;
   name: string;
   exercises: Exercise[];
+  /** Exercises swapped out mid-session that had logged sets; shown in summary, excluded from active list */
+  replacedExercises?: Exercise[];
   startTime: number;
   endTime?: number;
   startedAt: number; // persisted session start timestamp (ms)

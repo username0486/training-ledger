@@ -30,6 +30,8 @@ import { saveWorkout, deleteWorkouts as deleteWorkoutsApi } from './utils/api';
 import { recordSwap } from '../utils/exerciseSwapHistory';
 import { loadPreferences, getAppearance, setAppearance } from '../utils/preferences';
 import { createGroup, addToGroup, mergeGroups, ungroup, ungroupAll, applyGroupingToSession, swapGroupMember } from './utils/exerciseGrouping';
+import { nodesToExercises } from './utils/workoutNodes';
+import type { SessionListItem } from '../components/drag/exerciseDnDUtils';
 import { computeDurationSec } from './utils/duration';
 import { Toaster, toast } from 'sonner';
 
@@ -446,22 +448,25 @@ export default function App() {
       return;
     }
 
-    // Use a more unique ID to avoid conflicts with workouts created by finalizeInProgressSession
     const workoutId = `${Date.now()}-${Math.random()}`;
     const now = Date.now();
+    const items: SessionListItem[] =
+      template.exerciseNodes && template.exerciseNodes.length > 0
+        ? (template.exerciseNodes as SessionListItem[])
+        : template.exerciseNames.map((name, i) => ({
+            type: 'exercise' as const,
+            id: `ex-${template.id}-${i}-${name}`,
+            name,
+          }));
+    const exercises = nodesToExercises(items, workoutId);
     const newWorkout: Workout = {
       id: workoutId,
       name: template.name,
-      exercises: template.exerciseNames.map((name, idx) => ({
-        id: `${workoutId}-ex-${idx}-${Math.random()}`,
-        name,
-        sets: [],
-        isComplete: false,
-      })),
-      startTime: now, // Track when workout was created, but don't start timer yet
-      // Do NOT set startedAt - timer starts when first set is logged
+      exercises,
+      startTime: now,
+      startedAt: now,
       isComplete: false,
-      templateId: templateId, // Store template reference for duration estimation
+      templateId: templateId,
     };
     
     if (import.meta.env.DEV) {
@@ -707,9 +712,15 @@ export default function App() {
         };
         
         let updatedExercises = [...w.exercises, newExercise];
+        let replacedExercises = w.replacedExercises ?? [];
         
-        // If swap requested, swap the new exercise with the target in the group
+        // If swap requested, swap the new exercise with the target in the group (true replace-in-place)
         if (swapWithExerciseId && swapGroupId) {
+          const sourceExercise = w.exercises.find(ex => ex.id === swapWithExerciseId);
+          if (sourceExercise?.sets && sourceExercise.sets.length > 0) {
+            replacedExercises = [...replacedExercises, sourceExercise];
+            toast('Replaced exercise saved in session summary', { duration: 4000 });
+          }
           updatedExercises = swapGroupMember(updatedExercises, swapGroupId, swapWithExerciseId, newExercise.id);
         } else if (pairWithExerciseId) {
           // If pairing requested, group the new exercise with the target
@@ -730,7 +741,7 @@ export default function App() {
           }
         }
         
-        return { ...w, exercises: updatedExercises };
+        return { ...w, exercises: updatedExercises, replacedExercises: replacedExercises.length > 0 ? replacedExercises : undefined };
       }
       return w;
     }));
@@ -1117,8 +1128,14 @@ export default function App() {
   const swapGroupMemberInWorkout = (workoutId: string, groupId: string, sourceMemberInstanceId: string, replacementInstanceId: string) => {
     setWorkouts(workouts.map(w => {
       if (w.id === workoutId) {
+        const sourceExercise = w.exercises.find(ex => ex.id === sourceMemberInstanceId);
+        let replacedExercises = w.replacedExercises ?? [];
+        if (sourceExercise?.sets && sourceExercise.sets.length > 0) {
+          replacedExercises = [...replacedExercises, sourceExercise];
+          toast('Replaced exercise saved in session summary', { duration: 4000 });
+        }
         const updatedExercises = swapGroupMember(w.exercises, groupId, sourceMemberInstanceId, replacementInstanceId);
-        return { ...w, exercises: updatedExercises };
+        return { ...w, exercises: updatedExercises, replacedExercises: replacedExercises.length > 0 ? replacedExercises : undefined };
       }
       return w;
     }));
@@ -1146,33 +1163,29 @@ export default function App() {
       );
     }
 
-    // Swap semantics:
-    // - No logged sets: replace in place (true swap)
-    // - Has logged sets: keep old exercise with sets in history, insert new exercise after
+    // True replace-in-place: old exercise removed from active list entirely
+    // If old had logged sets, add to replacedExercises for session summary
     setWorkouts(workouts.map(w => {
       if (w.id !== workoutId) return w;
+      const ex = w.exercises.find(e => e.id === exerciseId);
+      if (!ex) return w;
+      let replacedExercises = w.replacedExercises ?? [];
+      if (ex.sets.length > 0) {
+        replacedExercises = [...replacedExercises, ex];
+        toast('Replaced exercise saved in session summary', { duration: 4000 });
+      }
+      const newEx: Exercise = {
+        id: `${Date.now()}-${Math.random()}`,
+        name: newExerciseName,
+        sets: [],
+        isComplete: false,
+        groupId: ex.groupId,
+      };
+      const updatedExercises = w.exercises.map(e => (e.id === exerciseId ? newEx : e));
       return {
         ...w,
-        exercises: w.exercises.flatMap(ex => {
-          if (ex.id !== exerciseId) return [ex];
-          // No logged sets: true swap-in-place
-          if (ex.sets.length === 0) {
-            return [{
-              ...ex,
-              name: newExerciseName,
-              sets: [],
-              isComplete: false,
-            }];
-          }
-          // Has logged sets: keep old exercise with sets, insert new after
-          const newEx = {
-            id: Date.now().toString() + Math.random(),
-            name: newExerciseName,
-            sets: [] as typeof ex.sets,
-            isComplete: false,
-          };
-          return [ex, newEx];
-        }),
+        exercises: updatedExercises,
+        replacedExercises: replacedExercises.length > 0 ? replacedExercises : undefined,
       };
     }));
   };
@@ -1514,24 +1527,27 @@ export default function App() {
   }
 
   return (
-    <div className="size-full flex flex-col bg-background">
+    <div className="size-full flex flex-col bg-background overflow-x-hidden min-w-0">
       <Toaster position="bottom" richColors />
       {/* Main content area with bottom padding for fixed nav (only when nav visible and screen needs it).
-          Start-logging uses BottomStickyCTA for CTA spacing, so no pb-24 here. */}
-      <div className={`flex-1 min-h-0 overflow-hidden flex flex-col ${
+          Excluded: create-template, view-template, workout-session, workout-summary, exercise-session,
+          start-logging, ad-hoc-session (active sessions use WorkoutSessionScreen; Add Exercise / Pair With
+          search screens have no nav and use pb-safe for minimal bottom padding). */}
+      <div className={`flex-1 min-h-0 overflow-hidden flex flex-col min-w-0 ${
         !(
           screen.type === 'create-template' ||
           screen.type === 'view-template' ||
           screen.type === 'workout-session' ||
           screen.type === 'workout-summary' ||
           screen.type === 'exercise-session' ||
-          screen.type === 'start-logging'
+          screen.type === 'start-logging' ||
+          screen.type === 'ad-hoc-session'
         ) ? 'pb-24' : ''
       }`}>
 
         {screen.type === 'home' && (
           !stateHydrated ? (
-            <div className="flex-1 overflow-y-auto" data-testid="home-loading-skeleton">
+            <div className="flex-1 overflow-x-hidden overflow-y-auto min-w-0" data-testid="home-loading-skeleton">
               <div className="max-w-2xl mx-auto p-5 space-y-6">
                 <div className="pt-4 pb-2 flex items-start justify-between animate-pulse">
                   <div className="h-14 w-14 rounded-2xl bg-surface" />
@@ -1698,30 +1714,23 @@ export default function App() {
               lastSessionData={lastSessionData}
               completedWorkouts={completedWorkouts}
               onBack={() => setScreen({ type: 'home' })}
-              onStart={(editedExerciseNames) => {
-                // Create workout with edited exercises (editedExerciseNames is always provided)
+              onStart={(editedItems: SessionListItem[]) => {
                 checkSessionConflict(
                   () => {
                     const workoutId = `${Date.now()}-${Math.random()}`;
                     const startedAt = Date.now();
+                    const exercises = nodesToExercises(editedItems, workoutId);
                     const newWorkout: Workout = {
                       id: workoutId,
                       name: template.name,
-                      exercises: editedExerciseNames.map((name, idx) => ({
-                        id: `${workoutId}-ex-${idx}-${Math.random()}`,
-                        name,
-                        sets: [],
-                        isComplete: false,
-                      })),
+                      exercises,
                       startTime: startedAt,
                       startedAt,
                       isComplete: false,
-                      templateId: template.id, // Store template reference for duration estimation
+                      templateId: template.id,
                     };
                     setWorkouts(prev => [...prev, newWorkout]);
                     saveIncompleteWorkoutId(newWorkout.id);
-                    // Navigate directly to active workout session (not completion screen)
-                    // Clear any exercise-session screen state first to prevent navigation to completion screen
                     setScreen({ type: 'workout-session', workoutId: newWorkout.id });
                   },
                   'workout',
@@ -1731,16 +1740,19 @@ export default function App() {
               onEdit={() => {
                 // Edit mode is handled internally by ViewTemplateScreen
               }}
-              onSave={(name, exercises) => {
-                // Update template with edited name and exercises
+              onSave={(name, items: SessionListItem[]) => {
+                const exerciseNames = items.flatMap((i) =>
+                  i.type === 'exercise' ? [i.name] : i.children.map((c) => c.name)
+                );
                 const updatedTemplate: WorkoutTemplate = {
                   ...template,
                   name: name.trim(),
-                  exerciseNames: exercises,
+                  exerciseNames,
+                  exerciseNodes: items,
                   updatedAt: Date.now(),
                 };
                 saveTemplate(updatedTemplate);
-                setTemplates(templates.map(t => t.id === template.id ? updatedTemplate : t));
+                setTemplates(templates.map(t => (t.id === template.id ? updatedTemplate : t)));
                 setBanner({ message: `Updated "${name}"`, variant: 'info' });
               }}
               onDelete={() => {
@@ -1830,6 +1842,8 @@ export default function App() {
               allWorkouts={workouts}
               startedAt={workout.startedAt || workout.startTime}
               endedAt={workout.endedAt || workout.endTime}
+              sessionLastSetAt={workout.lastSetAt}
+              sessionLastSetOwnerId={workout.lastSetOwnerId}
               onEnsureStartedAt={() => {
                 // Do NOT start timer here - timer starts when first set is logged
                 // This callback is kept for compatibility but does nothing
@@ -2261,9 +2275,10 @@ export default function App() {
           }
 
           // Convert session exercises to Workout format for WorkoutSessionScreen
-          const exercises: Exercise[] = session.exerciseOrder
-            .map(id => session.exercises.find(ex => ex.id === id))
-            .filter((ex): ex is NonNullable<typeof ex> => ex !== undefined)
+          // IMPORTANT: Include lastSetAt for rest timer persistence across navigation (e.g. add exercises)
+          const exercises: Exercise[] = (session.exerciseOrder ?? [])
+            .map(id => (session.exercises ?? []).find(ex => ex != null && ex.id === id))
+            .filter((ex): ex is NonNullable<typeof ex> => ex != null)
             .map(ex => ({
               id: ex.id,
               name: ex.name,
@@ -2271,6 +2286,7 @@ export default function App() {
               isComplete: ex.isComplete || false,
               isSkipped: ex.isSkipped,
               groupId: ex.groupId || null,
+              lastSetAt: ex.lastSetAt ?? (ex.sets.length > 0 ? Math.max(...ex.sets.map(s => s.timestamp)) : undefined),
             }));
 
           // Build last session data map
@@ -2290,17 +2306,25 @@ export default function App() {
               allWorkouts={workouts}
               startedAt={session.startedAt}
               endedAt={session.endedAt || session.endTime}
+              sessionLastSetAt={session.lastSetAt}
+              sessionLastSetOwnerId={session.lastSetOwnerId}
               onEnsureStartedAt={() => {
                 // Do NOT start timer here - timer starts when first set is logged
                 // This callback is kept for compatibility but does nothing
               }}
               onBack={() => setScreen({ type: 'home' })}
-              onAddExercise={(name: string, pairWithExerciseId?: string, swapWithExerciseId?: string, swapGroupId?: string) => {
-                // Add exercise to session
+              onAddExercise={(name: string, pairWithExerciseId?: string, swapWithExerciseId?: string, swapGroupId?: string): boolean | void => {
+                // Add exercise to session (must exist in library first)
                 const exercise = getAllExercisesList().find(
                   ex => ex.name === name
                 );
-                if (!exercise) return;
+                if (!exercise) {
+                  if (import.meta.env.DEV) {
+                    console.error('[App] attach_failed: exercise not in library', name);
+                  }
+                  toast.error('Could not add exercise to session.');
+                  return false;
+                }
 
                 const now = Date.now();
                 const exerciseInstanceId = `${session.id}-ex-${now}-${Math.random()}`;
@@ -2323,7 +2347,8 @@ export default function App() {
                 
                 // If swap requested, swap the new exercise with the target in the group
                 if (swapWithExerciseId && swapGroupId) {
-                  const exercisesArray = updatedSession.exercises.map(ex => ({
+                  const validExercises = (updatedSession.exercises ?? []).filter((ex): ex is NonNullable<typeof ex> => ex != null);
+                  const exercisesArray = validExercises.map(ex => ({
                     id: ex.id,
                     name: ex.name,
                     sets: ex.sets,
@@ -2332,7 +2357,7 @@ export default function App() {
                   }));
                   const swappedExercises = swapGroupMember(exercisesArray, swapGroupId, swapWithExerciseId, exerciseInstanceId);
                   // Map back to session format
-                  const exerciseMap = new Map(updatedSession.exercises.map(ex => [ex.id, ex]));
+                  const exerciseMap = new Map(validExercises.map(ex => [ex.id, ex]));
                   updatedSession.exercises = swappedExercises.map(ex => {
                     const original = exerciseMap.get(ex.id);
                     if (original) {

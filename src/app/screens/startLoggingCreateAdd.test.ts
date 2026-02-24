@@ -124,3 +124,47 @@ describe('Create and add - works when multiple selections are active', () => {
     expect(session.exercises[0].name).toBe(ex.name);
   });
 });
+
+describe('Add custom to active session (Add exercise modal)', () => {
+  it('given an active session, when creating a custom exercise, it appears in session list and exists in library', () => {
+    const customName = `Custom ${Date.now()}`;
+
+    // 1) Create custom exercise (persist to library)
+    const exercise = addExerciseToDb(customName);
+    expect(exercise).toBeDefined();
+    expect(exercise.name).toBe(customName);
+    expect(exercise.source).toBe('user');
+
+    // 2) Verify it exists in library
+    const inLibrary = getAllExercisesList().find((ex) => ex.name === customName);
+    expect(inLibrary).toBeDefined();
+    expect(inLibrary?.id).toBe(exercise.id);
+
+    // 3) Add to active session (simulate onAddExercise flow)
+    const existingSession: AdHocLoggingSession = {
+      id: `session-${Date.now()}`,
+      createdAt: Date.now(),
+      status: 'active',
+      exerciseOrder: ['ex-1'],
+      exercises: [
+        {
+          id: 'ex-1',
+          exerciseId: 'usr:existing',
+          name: 'Existing Exercise',
+          source: 'user',
+          addedAt: Date.now(),
+          sets: [],
+          isComplete: false,
+        },
+      ],
+    };
+
+    const sessionWithNew = buildSessionWithExercise(existingSession, exercise);
+
+    expect(sessionWithNew.exercises).toHaveLength(2);
+    expect(sessionWithNew.exerciseOrder).toHaveLength(2);
+    const addedEx = sessionWithNew.exercises.find((e) => e.name === customName);
+    expect(addedEx).toBeDefined();
+    expect(addedEx?.exerciseId).toBe(exercise.id);
+  });
+});

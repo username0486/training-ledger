@@ -54,7 +54,7 @@ export function FullScreenSearchLayout({
 
         {/* Scrollable results - padding at bottom when CTA present */}
         <div
-          className="flex-1 overflow-y-auto min-h-0 px-5 py-4"
+          className="flex-1 overflow-x-hidden overflow-y-auto min-h-0 min-w-0 px-5 py-4"
           style={resultsPaddingBottom ? { paddingBottom: resultsPaddingBottom } : undefined}
         >
           {results}

@@ -13,9 +13,10 @@ import { SwapExerciseScreen } from './SwapExerciseScreen';
 import { RemoveExerciseScreen } from './RemoveExerciseScreen';
 import { Exercise, Set, Workout } from '../types';
 import { formatRelativeTime, getRecentSessionsForExercise } from '../utils/storage';
-import { getAllExercisesList } from '../../utils/exerciseDb';
+import { getAllExercisesList, addExerciseToDb } from '../../utils/exerciseDb';
 import { formatWeight, formatWeightForDisplay, convertKgToDisplay, convertDisplayToKg } from '../../utils/weightFormat';
 import { getGroupInfo, filterGroupedMembers, buildSessionItems, SessionItem } from '../utils/exerciseGrouping';
+import { GroupLinkChip } from '../components/GroupLinkChip';
 import { SessionScrollLayout } from '../components/SessionScrollLayout';
 import {
   DropdownMenu,
@@ -34,6 +35,7 @@ import { formatDuration, getElapsedSec } from '../utils/duration';
 import { getElapsedSince, formatRestTime, getGroupLastSetAt, formatElapsed } from '../utils/restTimer';
 import { formatWorkoutTitle } from '../utils/periodOfDay';
 import { getComparisonFlag } from '../utils/exerciseComparison';
+import { toast } from 'sonner';
 
 interface WorkoutSessionScreenProps {
   workoutName: string;
@@ -41,7 +43,7 @@ interface WorkoutSessionScreenProps {
   lastSessionData: Map<string, { sets: Array<{ weight: number; reps: number }>; date: number }>;
   allWorkouts: Workout[];
   onBack: () => void;
-  onAddExercise: (name: string, pairWithExerciseId?: string, swapWithExerciseId?: string, swapGroupId?: string) => void;
+  onAddExercise: (name: string, pairWithExerciseId?: string, swapWithExerciseId?: string, swapGroupId?: string) => void | boolean;
   onAddSet: (exerciseId: string, weight: number, reps: number, restDuration?: number) => void;
   onAddSupersetSet?: (exercises: Array<{ exerciseId: string; weight: number; reps: number }>, supersetSetId: string) => void;
   onDeleteSet: (exerciseId: string, setId: string) => void;
@@ -93,6 +95,8 @@ export function WorkoutSessionScreen({
   onEndWorkout,
   startedAt,
   endedAt,
+  sessionLastSetAt,
+  sessionLastSetOwnerId,
   onEnsureStartedAt,
   onGroupExercises,
   onAddToGroup,
@@ -253,6 +257,13 @@ export function WorkoutSessionScreen({
   // This allows us to restore the exact UI state when returning from "All exercises complete" screen
   const lastFocusedExerciseIdRef = useRef<string | null>(null);
 
+  // Pending focus after swap: set by swap handlers before parent state updates.
+  // Resolved in focus useEffect when exercises change, to avoid focus jumping to last exercise.
+  type PendingFocusAfterSwap =
+    | { type: 'group'; groupId: string; childIndex: number }
+    | { type: 'solo'; exerciseIndex: number };
+  const pendingFocusAfterSwapRef = useRef<PendingFocusAfterSwap | null>(null);
+
   // Track exercise IDs and completion status separately to avoid triggering on set changes
   const exerciseIds = exercises.map(ex => ex.id).join(',');
   const exerciseCompletionStatus = exercises.map(ex => `${ex.id}:${ex.isComplete}`).join(',');
@@ -266,6 +277,50 @@ export function WorkoutSessionScreen({
   useEffect(() => {
     // If manage set sheet is open, don't change focus (user is editing)
     if (showManageSetSheet) {
+      return;
+    }
+
+    // Preserve focus when returning from Add flow - do not auto-focus last/new exercise
+    const storedFocusBeforeAdd = focusBeforeAddFlowRef.current;
+    if (storedFocusBeforeAdd && exercises.some(ex => ex.id === storedFocusBeforeAdd)) {
+      focusBeforeAddFlowRef.current = null;
+      setProgressionExerciseId(storedFocusBeforeAdd);
+      setInteractionFocusExerciseId(storedFocusBeforeAdd);
+      lastFocusedExerciseIdRef.current = storedFocusBeforeAdd;
+      previousCompletionStatusRef.current = exerciseCompletionStatus;
+      return;
+    }
+
+    // Resolve pending focus after swap (avoids jump to last exercise when swapped exercise was removed)
+    const pending = pendingFocusAfterSwapRef.current;
+    if (pending && exercises.length > 0) {
+      pendingFocusAfterSwapRef.current = null;
+      if (pending.type === 'group') {
+        const members = exercises
+          .filter(ex => ex.groupId === pending.groupId)
+          .sort((a, b) => {
+            const ia = exercises.findIndex(e => e.id === a.id);
+            const ib = exercises.findIndex(e => e.id === b.id);
+            return ia - ib;
+          });
+        if (pending.childIndex >= 0 && pending.childIndex < members.length) {
+          const target = members[pending.childIndex];
+          if (target) {
+            setProgressionExerciseId(target.id);
+            setInteractionFocusExerciseId(target.id);
+            lastFocusedExerciseIdRef.current = target.id;
+          }
+        }
+      } else if (pending.type === 'solo') {
+        if (pending.exerciseIndex >= 0 && pending.exerciseIndex < exercises.length) {
+          const target = exercises[pending.exerciseIndex];
+          if (target) {
+            setProgressionExerciseId(target.id);
+            setInteractionFocusExerciseId(target.id);
+            lastFocusedExerciseIdRef.current = target.id;
+          }
+        }
+      }
       return;
     }
     
@@ -492,33 +547,48 @@ export function WorkoutSessionScreen({
 
   const restElapsed = getRestElapsed();
 
-  // Sync restOwnerId and restStartedAtMs when exercises change (e.g., when resuming session)
-  // If current restOwnerId no longer has lastSetAt, find the new owner
+  // Helper: derive lastSetAt from sets if missing (robustness for data migration/edge cases)
+  const getEffectiveLastSetAt = (ex: Exercise): number | null => {
+    const fromField = ex.lastSetAt;
+    if (fromField != null) return fromField;
+    if (ex.sets.length > 0) return Math.max(...ex.sets.map(s => s.timestamp));
+    return null;
+  };
+
+  // Sync restOwnerId and restStartedAtMs when exercises change (e.g., add exercises, resume session)
+  // Use stable timestamps from exercise/session data; never clear when data exists
   useEffect(() => {
     if (restOwnerId) {
       // Check if current owner still has a valid lastSetAt
       const groupExercises = exercises.filter(ex => ex.groupId === restOwnerId);
       if (groupExercises.length > 0) {
         // It's a group
-        const groupLastSetAt = getGroupLastSetAt(groupExercises);
+        const groupLastSetAt = getGroupLastSetAt(groupExercises.map(ex => ({ lastSetAt: getEffectiveLastSetAt(ex) ?? undefined })));
         if (!groupLastSetAt) {
-          // Group no longer has lastSetAt, clear rest owner
-          setRestOwnerId(null);
-          setRestStartedAtMs(null);
+          // Fallback to session-level if available
+          if (sessionLastSetOwnerId === restOwnerId && sessionLastSetAt) {
+            setRestStartedAtMs(sessionLastSetAt);
+          } else {
+            setRestOwnerId(null);
+            setRestStartedAtMs(null);
+          }
         } else if (restStartedAtMs !== groupLastSetAt) {
-          // Update restStartedAtMs to match the group's lastSetAt
           setRestStartedAtMs(groupLastSetAt);
         }
       } else {
         // It's a single exercise
         const exercise = exercises.find(ex => ex.id === restOwnerId);
-        if (!exercise || !exercise.lastSetAt) {
-          // Exercise no longer has lastSetAt, clear rest owner
-          setRestOwnerId(null);
-          setRestStartedAtMs(null);
-        } else if (restStartedAtMs !== exercise.lastSetAt) {
-          // Update restStartedAtMs to match the exercise's lastSetAt
-          setRestStartedAtMs(exercise.lastSetAt);
+        const effectiveLastSetAt = exercise ? getEffectiveLastSetAt(exercise) : null;
+        if (!exercise || !effectiveLastSetAt) {
+          // Fallback to session-level if rest owner matches
+          if (sessionLastSetOwnerId === restOwnerId && sessionLastSetAt) {
+            setRestStartedAtMs(sessionLastSetAt);
+          } else {
+            setRestOwnerId(null);
+            setRestStartedAtMs(null);
+          }
+        } else if (restStartedAtMs !== effectiveLastSetAt) {
+          setRestStartedAtMs(effectiveLastSetAt);
         }
       }
     } else {
@@ -539,7 +609,7 @@ export function WorkoutSessionScreen({
       
       // Check groups first
       groups.forEach((groupExercises, groupId) => {
-        const groupLastSetAt = getGroupLastSetAt(groupExercises);
+        const groupLastSetAt = getGroupLastSetAt(groupExercises.map(ex => ({ lastSetAt: getEffectiveLastSetAt(ex) ?? undefined })));
         if (groupLastSetAt && groupLastSetAt > mostRecentTimestamp) {
           mostRecentTimestamp = groupLastSetAt;
           ownerId = groupId;
@@ -548,18 +618,27 @@ export function WorkoutSessionScreen({
       
       // Check single exercises
       exercises.forEach(ex => {
-        if (!ex.groupId && ex.lastSetAt && ex.lastSetAt > mostRecentTimestamp) {
-          mostRecentTimestamp = ex.lastSetAt;
-          ownerId = ex.id;
+        if (!ex.groupId) {
+          const ts = getEffectiveLastSetAt(ex);
+          if (ts && ts > mostRecentTimestamp) {
+            mostRecentTimestamp = ts;
+            ownerId = ex.id;
+          }
         }
       });
+      
+      // Fallback to session-level if no exercise has lastSetAt (e.g. during refetch)
+      if (!ownerId && sessionLastSetOwnerId && sessionLastSetAt) {
+        ownerId = sessionLastSetOwnerId;
+        mostRecentTimestamp = sessionLastSetAt;
+      }
       
       if (ownerId) {
         setRestOwnerId(ownerId);
         setRestStartedAtMs(mostRecentTimestamp);
       }
     }
-  }, [exercises.length, exercises.map(ex => `${ex.id}:${ex.lastSetAt || 0}:${ex.groupId || ''}`).join('|')]);
+  }, [exercises.length, exercises.map(ex => `${ex.id}:${ex.lastSetAt ?? (ex.sets.length > 0 ? Math.max(...ex.sets.map(s => s.timestamp)) : 0)}:${ex.groupId || ''}`).join('|'), sessionLastSetAt, sessionLastSetOwnerId]);
 
   const handleAddSet = () => {
     if (!focusExercise) return;
@@ -664,7 +743,7 @@ export function WorkoutSessionScreen({
     const isCompleted = item.isComplete;
     
     if (item.type === 'superset') {
-      // Superset inactive card
+      // Group inactive card
       const groupId = item.id;
       const isRestOwner = !isCompleted && restOwnerId === groupId && restStartedAtMs !== null;
       const hasSets = itemExercises.some(ex => ex.sets.length > 0);
@@ -675,9 +754,9 @@ export function WorkoutSessionScreen({
             ? 'bg-surface/20 border-border-subtle/50 opacity-50' 
             : 'bg-surface/30 border-border-subtle hover:bg-surface/40 opacity-60'
         }`}>
-          <p className={`text-base ${isCompleted ? 'text-text-muted' : 'text-text-primary'}`}>
-            Group · {itemExercises.length} exercises
-          </p>
+          <div className={`flex items-center gap-2 ${isCompleted ? 'text-text-muted' : 'text-text-primary'}`}>
+            <GroupLinkChip childrenCount={itemExercises.length} />
+          </div>
           {isRestOwner ? (
             <p className="text-sm text-text-muted mt-0.5">
               Since last set: {formatElapsed(restElapsed)}
@@ -763,6 +842,10 @@ export function WorkoutSessionScreen({
 
   const handleSwapExercise = (newExerciseName: string) => {
     if (!focusExercise) return;
+    const exerciseIndex = exercises.findIndex(ex => ex.id === focusExercise.id);
+    if (exerciseIndex !== -1) {
+      pendingFocusAfterSwapRef.current = { type: 'solo', exerciseIndex };
+    }
     onSwapExercise(focusExercise.id, newExerciseName);
     setShowSwapExercise(false);
   };
@@ -809,28 +892,60 @@ export function WorkoutSessionScreen({
   const collapseDrawer = () => {
   };
 
-  const handleAddExerciseFromModal = (name: string) => {
-    if (name.trim()) {
-      onAddExercise(name.trim());
-      setShowAddExercise(false);
-      // If we were in the "all exercises completed" state, refocus on the new exercise
-      // The focus will be set automatically by the useEffect that handles exercise addition
-      // But we should clear the stored last focused ID since we're adding a new exercise
-      if (!focusExercise) {
-        lastFocusedExerciseIdRef.current = null;
-      }
+  // Preserve focus when returning from Add flow - do not auto-focus last/new exercise
+  const focusBeforeAddFlowRef = useRef<string | null>(null);
+
+  const handleOpenAddExercise = () => {
+    focusBeforeAddFlowRef.current = interactionFocusExerciseId;
+    if (import.meta.env.DEV && restOwnerId && restStartedAtMs) {
+      const ownerEx = exercises.find(ex => ex.id === restOwnerId || ex.groupId === restOwnerId);
+      const lastSetAt = ownerEx?.lastSetAt ?? (ownerEx?.sets.length ? Math.max(...ownerEx.sets.map(s => s.timestamp)) : null);
+      console.log('[WorkoutSession] Rest timer before Add flow:', { restOwnerId, restStartedAtMs, lastSetAt });
     }
+    setShowAddExercise(true);
+  };
+
+  const handleAddExerciseFromModal = (name: string) => {
+    if (!name.trim()) return;
+    const result = onAddExercise(name.trim());
+    // If onAddExercise returns false (e.g. attach failed), do NOT close modal
+    if (result === false) return;
+    setShowAddExercise(false);
+    // If we were in the "all exercises completed" state, refocus on the new exercise
+    if (!focusExercise) {
+      lastFocusedExerciseIdRef.current = null;
+      focusBeforeAddFlowRef.current = null;
+    }
+    // Otherwise focusBeforeAddFlowRef stays set so focus effect restores focus when exercises change
   };
 
   const handleAddNewExercise = (name: string) => {
-    // Add new exercise to DB and to workout
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+
+    // 1) Persist custom exercise to library (must succeed before adding to session)
     try {
-      const { addExerciseToDb } = require('../utils/exerciseDb');
-      addExerciseToDb(name);
-    } catch (error) {
-      // Might already exist
+      addExerciseToDb(trimmedName);
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.error('[WorkoutSession] create_failed:', err);
+      }
+      toast.error('Could not save exercise. Try again.');
+      return;
     }
-    handleAddExerciseFromModal(name);
+
+    // 2) Verify exercise exists in library (defensive)
+    const exercise = getAllExercisesList().find(ex => ex.name === trimmedName);
+    if (!exercise) {
+      if (import.meta.env.DEV) {
+        console.error('[WorkoutSession] attach_failed: exercise not found after create', trimmedName);
+      }
+      toast.error('Exercise was saved but could not be added to session.');
+      return;
+    }
+
+    // 3) Add to session and close only if both steps succeeded
+    handleAddExerciseFromModal(trimmedName);
   };
 
   const handleDragStart = (index: number) => {
@@ -1108,7 +1223,7 @@ export function WorkoutSessionScreen({
   // Render active item (full controls visible)
   const renderActiveItem = (item: SessionItem) => {
     if (item.type === 'superset' && item.exerciseIds.length >= 2 && onAddSupersetSet && onCompleteGroup) {
-      // Active superset block
+      // Active group block
       const groupId = item.id;
       return (
         <SupersetBlock
@@ -1363,7 +1478,7 @@ export function WorkoutSessionScreen({
           Finish workout
         </Button>
         <button
-          onClick={() => setShowAddExercise(true)}
+          onClick={handleOpenAddExercise}
           className="w-full text-sm text-text-muted border border-border-subtle rounded-lg py-2.5 px-4 bg-transparent hover:bg-surface/40 hover:border-border-medium transition-colors"
         >
           <Plus className="w-4 h-4 mr-2 inline" />
@@ -1384,7 +1499,15 @@ export function WorkoutSessionScreen({
     return (
       <ExerciseSearchScreen
         title="Add Exercise"
-        onBack={() => setShowAddExercise(false)}
+        onBack={() => {
+          if (import.meta.env.DEV && restOwnerId && restStartedAtMs) {
+            const ownerEx = exercises.find(ex => ex.id === restOwnerId || ex.groupId === restOwnerId);
+            const lastSetAt = ownerEx?.lastSetAt ?? (ownerEx?.sets.length ? Math.max(...ownerEx.sets.map(s => s.timestamp)) : null);
+            console.log('[WorkoutSession] Rest timer returning from Add flow:', { restOwnerId, restStartedAtMs, lastSetAt });
+          }
+          focusBeforeAddFlowRef.current = null;
+          setShowAddExercise(false);
+        }}
         onSelectExercise={handleAddExerciseFromModal}
         onAddNewExercise={handleAddNewExercise}
         selectedExercises={[]}
@@ -1516,12 +1639,21 @@ export function WorkoutSessionScreen({
             });
             return;
           }
+          // Set focus to swapped-in exercise BEFORE parent state update to prevent jump to last
+          setProgressionExerciseId(replacementExerciseId);
+          setInteractionFocusExerciseId(replacementExerciseId);
+          lastFocusedExerciseIdRef.current = replacementExerciseId;
           onSwapGroupMember?.(activeGroupIdForManagement, exerciseIdToReplace, replacementExerciseId);
           setShowSwapExerciseInSuperset(false);
           setActiveGroupIdForManagement(null);
           setExerciseToSwapId(null);
         }}
         onAddNewExerciseAndSwap={(exerciseIdToReplace, newExerciseName) => {
+          const groupMembers = exercises.filter(ex => ex.groupId === activeGroupIdForManagement);
+          const childIndex = groupMembers.findIndex(ex => ex.id === exerciseIdToReplace);
+          if (childIndex !== -1) {
+            pendingFocusAfterSwapRef.current = { type: 'group', groupId: activeGroupIdForManagement, childIndex };
+          }
           onAddExercise(newExerciseName, undefined, exerciseIdToReplace, activeGroupIdForManagement);
           setShowSwapExerciseInSuperset(false);
           setActiveGroupIdForManagement(null);
@@ -1577,7 +1709,7 @@ export function WorkoutSessionScreen({
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center py-12">
             <p className="text-text-muted mb-4">No exercises yet</p>
-            <Button variant="primary" onClick={() => setShowAddExercise(true)}>
+            <Button variant="primary" onClick={handleOpenAddExercise}>
               <Plus className="w-4 h-4 mr-2 inline" />
               Add Exercise
             </Button>

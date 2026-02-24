@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Play, GripVertical, Pencil, Trash2, X, Plus, Check } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { Play, GripVertical, Pencil, Trash2, X, Plus, Check, Link2Off } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
@@ -8,19 +8,82 @@ import { formatTimeAgo } from '../utils/storage';
 import { ExerciseSearchScreen } from './ExerciseSearchScreen';
 import { addExerciseToDb } from '../utils/exerciseDb';
 import { FloatingLabelInput } from '../components/FloatingLabelInput';
-import { Dumbbell } from 'lucide-react';
 import { formatWeight } from '../../utils/weightFormat';
-import { estimateWorkoutDuration, formatDurationRange } from '../utils/duration';
+import {
+  estimateWorkoutDuration,
+  formatDurationRange,
+  type EstimationExercise,
+} from '../utils/duration';
+import { ExerciseReorderAndGroupList } from '../../components/drag/ExerciseReorderAndGroupList';
+import type { ExerciseItem, GroupItem, SessionListItem } from '../../components/drag/exerciseDnDUtils';
+import {
+  flattenToNames,
+  findItemLocation,
+  removeItem,
+  replaceExerciseById,
+  pullChildOutOfGroup,
+  ungroup,
+} from '../../components/drag/exerciseDnDUtils';
+import { GroupLinkChip } from '../components/GroupLinkChip';
+import { toast } from 'sonner';
+import type { WorkoutNode } from '../types/templates';
+import { namesToNodes } from '../utils/workoutNodes';
+import { CTA_BREATHING_ROOM_PX } from '../constants/layout';
+
+/** Compare items by structure and names (ignores IDs for dirty check). */
+function itemsMatch(a: SessionListItem[], b: SessionListItem[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const ai = a[i];
+    const bi = b[i];
+    if (ai.type !== bi.type) return false;
+    if (ai.type === 'exercise' && bi.type === 'exercise') {
+      if (ai.name !== bi.name) return false;
+    } else if (ai.type === 'group' && bi.type === 'group') {
+      if (ai.children.length !== bi.children.length) return false;
+      for (let j = 0; j < ai.children.length; j++) {
+        if (ai.children[j].name !== bi.children[j].name) return false;
+      }
+    }
+  }
+  return true;
+}
+
+function createExerciseItems(names: string[], templateId: string): ExerciseItem[] {
+  return names.map((name, i) => ({ type: 'exercise' as const, id: `ex-${templateId}-${i}-${name}`, name }));
+}
+
+function templateToItems(template: WorkoutTemplate): SessionListItem[] {
+  if (template.exerciseNodes && template.exerciseNodes.length > 0) {
+    return template.exerciseNodes as SessionListItem[];
+  }
+  return createExerciseItems(template.exerciseNames || [], template.id || '');
+}
+
+/** Convert SessionListItem[] to EstimationExercise[] for duration estimation. */
+function itemsToEstimationExercises(items: SessionListItem[]): EstimationExercise[] {
+  const result: EstimationExercise[] = [];
+  for (const item of items) {
+    if (item.type === 'exercise') {
+      result.push({ setCount: 3, groupId: null });
+    } else {
+      for (const _ of item.children) {
+        result.push({ setCount: 3, groupId: item.id });
+      }
+    }
+  }
+  return result;
+}
 
 interface ViewTemplateScreenProps {
   template: WorkoutTemplate;
   lastSessionData: Map<string, { sets: Array<{ weight: number; reps: number }>; date: number }>;
   completedWorkouts?: Array<{ templateId?: string; durationSec?: number; endedAt?: number }>; // For duration estimation
   onBack: () => void;
-  onStart: (editedExerciseNames: string[]) => void;
+  onStart: (editedItems: SessionListItem[]) => void;
   onEdit: () => void;
   onDelete: () => void;
-  onSave?: (name: string, exercises: string[]) => void; // Optional: for saving edits
+  onSave?: (name: string, items: SessionListItem[]) => void; // Optional: for saving edits
 }
 
 export function ViewTemplateScreen({
@@ -53,17 +116,19 @@ export function ViewTemplateScreen({
     );
   }
 
-  // Defensive: Ensure template has required properties
-  if (!template.exerciseNames || !Array.isArray(template.exerciseNames)) {
+  // Defensive: Ensure template has exercises (exerciseNames or exerciseNodes)
+  const hasExerciseNames = Array.isArray(template.exerciseNames) && template.exerciseNames.length > 0;
+  const hasExerciseNodes = Array.isArray(template.exerciseNodes) && template.exerciseNodes.length > 0;
+  if (!hasExerciseNames && !hasExerciseNodes) {
     if (import.meta.env.DEV) {
-      console.error('[ViewTemplateScreen] Template has invalid exerciseNames:', template);
+      console.error('[ViewTemplateScreen] Template has no exercises:', template);
     }
     return (
       <div className="flex flex-col h-full items-center justify-center p-5">
         <div className="text-center space-y-4 max-w-md">
           <h2 className="text-xl font-semibold">Invalid workout data</h2>
           <p className="text-text-muted">
-            The workout exercises data is invalid or corrupted.
+            The workout has no exercises. Add exercises to get started.
           </p>
           <Button variant="primary" onClick={onBack}>
             Back
@@ -76,27 +141,32 @@ export function ViewTemplateScreen({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [editedName, setEditedName] = useState<string>(template.name || '');
-  const [editedExercises, setEditedExercises] = useState<string[]>(template.exerciseNames || []);
-  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
-  const [touchStartY, setTouchStartY] = useState<number | null>(null);
-  const [touchStartIndex, setTouchStartIndex] = useState<number | null>(null);
-  const [isDraggingFromHandle, setIsDraggingFromHandle] = useState(false);
+  const [editedItems, setEditedItems] = useState<SessionListItem[]>(() => templateToItems(template));
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [showReplaceExercise, setShowReplaceExercise] = useState(false);
-  const [replaceIndex, setReplaceIndex] = useState<number | null>(null);
+  const [replaceItem, setReplaceItem] = useState<ExerciseItem | null>(null);
+
+  const originalItems = useMemo(() => templateToItems(template), [template?.id]);
+  const isDirty = useMemo(() => {
+    const nameChanged = editedName.trim() !== (template.name || '').trim();
+    const itemsChanged = !itemsMatch(editedItems, originalItems);
+    return nameChanged || itemsChanged;
+  }, [editedName, editedItems, template.name, originalItems]);
+
+  // Derive exercise names for consumers
+  const editedExercises = useMemo(() => flattenToNames(editedItems), [editedItems]);
 
   // Reset edited values only when template changes (preserve edits when toggling edit mode)
   useEffect(() => {
     if (template) {
       setEditedName(template.name || '');
-      setEditedExercises([...(template.exerciseNames || [])]);
+      setEditedItems(templateToItems(template));
     }
   }, [template?.id]);
 
-  const handleDone = () => {
-    // Save changes if onSave callback is provided
+  const handleConfirmChanges = () => {
     if (onSave) {
-      onSave(editedName.trim(), editedExercises);
+      onSave(editedName.trim(), editedItems);
     }
     setIsEditMode(false);
   };
@@ -104,28 +174,33 @@ export function ViewTemplateScreen({
   const handleCancel = () => {
     if (template) {
       setEditedName(template.name || '');
-      setEditedExercises([...(template.exerciseNames || [])]);
+      setEditedItems(templateToItems(template));
     }
     setIsEditMode(false);
   };
 
-  const handleRemoveExercise = (index: number) => {
-    setEditedExercises(editedExercises.filter((_, i) => i !== index));
+  const handleRemoveExercise = (item: ExerciseItem) => {
+    const loc = findItemLocation(editedItems, item.id);
+    if (!loc) return;
+    const { nextItems } = removeItem(editedItems, loc);
+    setEditedItems(nextItems);
   };
 
-  const handleReplaceExercise = (index: number) => {
-    setReplaceIndex(index);
+  const handleReplaceExercise = (item: ExerciseItem) => {
+    setReplaceItem(item);
     setShowReplaceExercise(true);
   };
 
   const handleReplaceSelect = (exerciseName: string) => {
-    if (replaceIndex !== null) {
-      const newExercises = [...editedExercises];
-      newExercises[replaceIndex] = exerciseName;
-      setEditedExercises(newExercises);
-      setReplaceIndex(null);
+    if (replaceItem) {
+      setEditedItems((prev) => replaceExerciseById(prev, replaceItem.id, { name: exerciseName }));
+      setReplaceItem(null);
       setShowReplaceExercise(false);
     }
+  };
+
+  const handleUngroup = (group: GroupItem) => {
+    setEditedItems((prev) => ungroup(prev, group.id));
   };
 
   const handleAddExercise = (exerciseName: string) => {
@@ -136,7 +211,10 @@ export function ViewTemplateScreen({
       } catch (error) {
         // Exercise might already exist
       }
-      setEditedExercises([...editedExercises, trimmedName]);
+      setEditedItems((prev) => [
+        ...prev,
+        { type: 'exercise' as const, id: `ex-add-${Date.now()}-${Math.random().toString(36).slice(2)}`, name: trimmedName },
+      ]);
       setShowAddExercise(false);
     }
   };
@@ -150,101 +228,18 @@ export function ViewTemplateScreen({
     handleAddExercise(name);
   };
 
-  const handleDragStart = (index: number) => {
-    setDraggedIndex(index);
-  };
-
-  const handleDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    if (draggedIndex === null || draggedIndex === index) return;
-
-    const newExercises = [...editedExercises];
-    const draggedItem = newExercises[draggedIndex];
-    newExercises.splice(draggedIndex, 1);
-    newExercises.splice(index, 0, draggedItem);
-    
-    setEditedExercises(newExercises);
-    setDraggedIndex(index);
-  };
-
-  const handleDragEnd = () => {
-    setDraggedIndex(null);
-  };
-
-  // Touch/pointer handlers for mobile drag (only used in edit mode)
-  const handleHandleTouchStart = (e: React.TouchEvent, index: number) => {
-    if (!isEditMode) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const touch = e.touches[0];
-    setTouchStartY(touch.clientY);
-    setTouchStartIndex(index);
-    setDraggedIndex(index);
-    setIsDraggingFromHandle(true);
-  };
-
-  const handleHandlePointerDown = (e: React.PointerEvent, index: number) => {
-    if (!isEditMode) return;
-    // Prevent text selection on mobile
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.pointerType === 'touch' || e.pointerType === 'pen') {
-      setTouchStartY(e.clientY);
-      setTouchStartIndex(index);
-      setDraggedIndex(index);
-      setIsDraggingFromHandle(true);
-    }
-  };
-
-  const handleRowTouchMove = (e: React.TouchEvent, index: number) => {
-    if (!isEditMode || !isDraggingFromHandle || touchStartY === null || touchStartIndex === null) return;
-    e.preventDefault();
-    e.stopPropagation();
-
-    const touch = e.touches[0];
-    const currentY = touch.clientY;
-    const deltaY = currentY - touchStartY;
-
-    // Only reorder if moved significantly (more than 20px)
-    if (Math.abs(deltaY) > 20) {
-      const newExercises = [...editedExercises];
-      const draggedItem = newExercises[touchStartIndex];
-      
-      // Calculate target index based on movement
-      const rowHeight = 60; // Approximate row height
-      const targetOffset = Math.round(deltaY / rowHeight);
-      let targetIndex = touchStartIndex + targetOffset;
-      targetIndex = Math.max(0, Math.min(targetIndex, newExercises.length - 1));
-
-      if (targetIndex !== touchStartIndex) {
-        newExercises.splice(touchStartIndex, 1);
-        newExercises.splice(targetIndex, 0, draggedItem);
-        setEditedExercises(newExercises);
-        setTouchStartIndex(targetIndex);
-        setDraggedIndex(targetIndex);
-      }
-    }
-  };
-
-  const handleRowTouchEnd = (e: React.TouchEvent) => {
-    if (!isEditMode || !isDraggingFromHandle) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setTouchStartY(null);
-    setTouchStartIndex(null);
-    setDraggedIndex(null);
-    setIsDraggingFromHandle(false);
-  };
-
   const handleStart = () => {
-    // Always use editedExercises (which may have been modified in edit mode)
-    // If never edited, editedExercises equals template.exerciseNames
-    onStart(editedExercises);
+    onStart(editedItems);
   };
 
-  // Estimate workout duration for preview
-  const exerciseCount = isEditMode ? editedExercises.length : (template.exerciseNames?.length || 0);
-  const durationEstimate = estimateWorkoutDuration(template.id, exerciseCount, completedWorkouts);
+  // Estimate workout duration for preview (group-aware: groups = rounds with rest after each round)
+  const itemsForEstimate = isEditMode ? editedItems : templateToItems(template);
+  const estimationExercises = itemsToEstimationExercises(itemsForEstimate);
+  const durationEstimate = estimateWorkoutDuration(
+    template.id,
+    estimationExercises,
+    completedWorkouts
+  );
 
   if (showAddExercise) {
     return (
@@ -262,13 +257,13 @@ export function ViewTemplateScreen({
     );
   }
 
-  if (showReplaceExercise && replaceIndex !== null) {
+  if (showReplaceExercise && replaceItem !== null) {
     return (
       <ExerciseSearchScreen
         title="Replace Exercise"
         onBack={() => {
           setShowReplaceExercise(false);
-          setReplaceIndex(null);
+          setReplaceItem(null);
         }}
         onSelectExercise={handleReplaceSelect}
         onAddNewExercise={(name) => handleReplaceSelect(name)}
@@ -287,35 +282,33 @@ export function ViewTemplateScreen({
         title={isEditMode ? editedName : template.name}
         onBack={isEditMode ? handleCancel : onBack}
         rightAction={
-          <div className="flex items-center gap-1">
-            {isEditMode ? (
-              <>
-                <button
-                  onClick={() => setShowDeleteConfirm(true)}
-                  className="p-2 -mr-2 rounded-lg hover:bg-surface transition-colors text-text-muted hover:text-danger"
-                >
-                  <Trash2 className="w-5 h-5" />
-                </button>
-                <button
-                  onClick={handleDone}
-                  className="p-2 -mr-2 rounded-lg hover:bg-surface transition-colors text-accent"
-                >
-                  <Check className="w-5 h-5" />
-                </button>
-              </>
-            ) : (
-              <button
-                onClick={() => setIsEditMode(true)}
-                className="p-2 -mr-2 rounded-lg hover:bg-surface transition-colors text-text-muted hover:text-text-primary"
-              >
-                <Pencil className="w-5 h-5" />
-              </button>
-            )}
-          </div>
+          !isEditMode ? (
+            <button
+              onClick={() => setIsEditMode(true)}
+              className="p-2 -mr-2 rounded-lg hover:bg-surface transition-colors text-text-muted hover:text-text-primary"
+            >
+              <Pencil className="w-5 h-5" />
+            </button>
+          ) : isDirty ? (
+            <button
+              onClick={handleConfirmChanges}
+              className="p-2 -mr-2 rounded-lg hover:bg-surface transition-colors text-accent"
+              aria-label="Save changes"
+            >
+              <Check className="w-5 h-5" />
+            </button>
+          ) : undefined
         }
       />
 
-      <div className="flex-1 overflow-y-auto pb-24">
+      <div
+        className="flex-1 overflow-x-hidden overflow-y-auto min-w-0"
+        style={
+          !isEditMode
+            ? { paddingBottom: `max(calc(8rem + env(safe-area-inset-bottom, 0px)), env(safe-area-inset-bottom, 0px))` }
+            : undefined
+        }
+      >
         <div className="max-w-2xl mx-auto p-5 space-y-4">
           {/* Workout name input (only in edit mode) */}
           {isEditMode && (
@@ -324,129 +317,252 @@ export function ViewTemplateScreen({
               value={editedName}
               onChange={(e) => setEditedName(e.target.value)}
               autoFocus={false}
-              icon={<Dumbbell />}
             />
           )}
 
           {/* Exercise list */}
           <div className="space-y-2">
             <p className="text-xs uppercase tracking-wide text-text-muted px-1">
-              Exercises ({isEditMode ? editedExercises.length : (template.exerciseNames?.length || 0)})
+              Exercises ({isEditMode ? flattenToNames(editedItems).length : (template.exerciseNames?.length || 0)})
             </p>
-            {(isEditMode ? editedExercises : (template.exerciseNames || [])).map((exercise, index) => {
-              if (!exercise) {
-                if (import.meta.env.DEV) {
-                  console.warn('[ViewTemplateScreen] Empty exercise at index:', index);
-                }
-                return null;
-              }
-              const lastSession = lastSessionData?.get(exercise);
-              return (
-                <Card
-                  key={`${exercise}-${index}`} 
-                  gradient
-                  className={isEditMode ? 'cursor-pointer' : ''}
-                  onClick={isEditMode ? () => handleReplaceExercise(index) : undefined}
-                >
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-3">
-                      {isEditMode && (
-                        <div
-                          draggable
-                          onDragStart={() => handleDragStart(index)}
-                          onDragOver={(e) => handleDragOver(e, index)}
-                          onDragEnd={handleDragEnd}
-                          onTouchStart={(e) => handleHandleTouchStart(e, index)}
-                          onPointerDown={(e) => handleHandlePointerDown(e, index)}
-                          className="cursor-grab active:cursor-grabbing drag-handle"
-                          style={{
-                            WebkitTouchCallout: 'none',
-                            WebkitUserSelect: 'none',
-                            userSelect: 'none',
-                            touchAction: 'none',
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                        >
+            {isEditMode ? (
+              <ExerciseReorderAndGroupList
+                items={editedItems}
+                onChange={setEditedItems}
+                enableGrouping={true}
+                renderExerciseRow={(item, { dragHandleProps, isDragging }) => (
+                    <Card
+                      gradient
+                      className="cursor-pointer transition-shadow"
+                      onClick={() => handleReplaceExercise(item)}
+                    >
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-3">
+                          <div
+                            {...dragHandleProps}
+                            onClick={(e) => e.stopPropagation()}
+                            className="touch-none"
+                          >
+                            <GripVertical className="w-5 h-5 text-text-muted" />
+                          </div>
+                          <span className="flex-1">{item.name}</span>
+                          <button
+                            data-no-drag
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRemoveExercise(item);
+                            }}
+                            className="p-1.5 text-text-muted hover:text-danger transition-colors rounded-lg hover:bg-surface/50"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div className="text-xs text-text-muted">Tap to replace</div>
+                      </div>
+                    </Card>
+                  )}
+                renderGroupChild={(child, { dragHandleProps }) => (
+                  <Card
+                    gradient
+                    className="cursor-pointer transition-shadow border-border-subtle"
+                    onClick={() => handleReplaceExercise(child)}
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-3">
+                        <div {...dragHandleProps} onClick={(e) => e.stopPropagation()} className="touch-none">
                           <GripVertical className="w-5 h-5 text-text-muted" />
                         </div>
-                      )}
-                      <span className="text-text-muted w-6">#{index + 1}</span>
-                      <span className="flex-1">{exercise}</span>
-                      {isEditMode && (
+                        <span className="flex-1">{child.name}</span>
                         <button
+                          data-no-drag
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleRemoveExercise(index);
+                            handleRemoveExercise(child);
                           }}
-                          className="p-1.5 text-text-muted hover:text-danger transition-colors rounded-lg hover:bg-surface/50"
+                          className="min-w-[40px] min-h-[40px] flex items-center justify-center text-text-muted hover:text-danger rounded-lg hover:bg-surface/50 transition-colors -m-2"
                         >
                           <X className="w-4 h-4" />
                         </button>
-                      )}
+                      </div>
+                      <div className="text-xs text-text-muted">Tap to replace</div>
                     </div>
-                    {!isEditMode && lastSession && (
-                      <div className="ml-9 text-text-muted">
-                        <p className="text-xs mb-1">
-                          Last session · {formatTimeAgo(lastSession.date)}
-                        </p>
-                        <div className="flex gap-3 flex-wrap">
-                          {lastSession.sets
-                            .filter(set => set && set.weight != null && set.reps != null)
-                            .map((set, idx) => (
-                              <span key={idx} className="text-xs">
-                                {formatWeight(set.weight)} × {set.reps}
-                              </span>
-                            ))}
+                  </Card>
+                )}
+                renderGroupRow={(group, { dragHandleProps }, { children }) => (
+                    <Card gradient>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div {...dragHandleProps} onClick={(e) => e.stopPropagation()} className="touch-none">
+                              <GripVertical className="w-5 h-5 text-text-muted" />
+                            </div>
+                            <GroupLinkChip childrenCount={group.children.length} />
+                          </div>
+                          <button
+                            data-no-drag
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const prev = editedItems;
+                              handleUngroup(group);
+                              toast('Ungrouped', {
+                                action: {
+                                  label: 'Undo',
+                                  onClick: () => setEditedItems(prev),
+                                },
+                              });
+                            }}
+                            className="min-w-[40px] min-h-[40px] flex items-center justify-center text-text-muted hover:text-text-primary rounded-lg hover:bg-surface/50 transition-colors -m-2"
+                          >
+                            <Link2Off className="w-5 h-5" />
+                          </button>
+                        </div>
+                        <div className="mt-3 flex flex-col gap-2">
+                          {children}
                         </div>
                       </div>
-                    )}
-                    {isEditMode && (
-                      <div className="ml-9 text-xs text-text-muted">
-                        Tap to replace
-                      </div>
-                    )}
-                  </div>
-                </Card>
-              );
-            })}
+                    </Card>
+                  )}
+              />
+            ) : (
+              (() => {
+                const items = templateToItems(template);
+                return items.map((item) => {
+                  if (item.type === 'exercise') {
+                    const lastSession = lastSessionData?.get(item.name);
+                    return (
+                      <Card key={item.id} gradient>
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-3">
+                            <span className="flex-1">{item.name}</span>
+                          </div>
+                          {lastSession && (
+                            <div className="mt-2 text-text-muted">
+                              <p className="text-xs mb-1">
+                                Last session · {formatTimeAgo(lastSession.date)}
+                              </p>
+                              <div className="flex gap-3 flex-wrap">
+                                {lastSession.sets
+                                  .filter((set) => set && set.weight != null && set.reps != null)
+                                  .map((set, i) => (
+                                    <span key={i} className="text-xs">
+                                      {formatWeight(set.weight)} × {set.reps}
+                                    </span>
+                                  ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </Card>
+                    );
+                  } else {
+                    return (
+                      <Card key={item.id} gradient>
+                        <div className="space-y-2">
+                          <GroupLinkChip childrenCount={item.children.length} />
+                          <div className="mt-3 flex flex-col gap-2">
+                            {item.children.map((c) => {
+                              const lastSession = lastSessionData?.get(c.name);
+                              return (
+                                <Card key={c.id} gradient className="border-border-subtle">
+                                  <div className="space-y-2">
+                                    <div className="flex items-center gap-3">
+                                      <span className="flex-1">{c.name}</span>
+                                    </div>
+                                    {lastSession && (
+                                      <div className="mt-2 text-text-muted">
+                                        <p className="text-xs mb-1">
+                                          Last session · {formatTimeAgo(lastSession.date)}
+                                        </p>
+                                        <div className="flex gap-3 flex-wrap">
+                                          {lastSession.sets
+                                            .filter((set) => set && set.weight != null && set.reps != null)
+                                            .map((set, j) => (
+                                              <span key={j} className="text-xs">
+                                                {formatWeight(set.weight)} × {set.reps}
+                                              </span>
+                                            ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                </Card>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </Card>
+                    );
+                  }
+                });
+              })()
+            )}
             
             {/* Add exercise button in edit mode */}
             {isEditMode && (
-              <button
-                onClick={() => setShowAddExercise(true)}
-                className="w-full py-3 px-4 border-2 border-dashed border-border-subtle rounded-lg text-text-muted hover:text-text-primary hover:border-accent transition-colors flex items-center justify-center gap-2"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Add exercise</span>
-              </button>
+              <div className="pt-4">
+                <button
+                  onClick={() => setShowAddExercise(true)}
+                  className="w-full py-3 px-4 border-2 border-dashed border-border-subtle rounded-lg text-text-muted hover:text-text-primary hover:border-accent transition-colors flex items-center justify-center gap-2"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add exercise</span>
+                </button>
+              </div>
             )}
           </div>
+
+          {/* Edit mode: actions area (Delete, Confirm) - scrolls with page */}
+          {isEditMode && (
+            <div
+              className="pt-8 pb-6 space-y-4"
+              style={{
+                paddingBottom: `calc(${CTA_BREATHING_ROOM_PX}px + env(safe-area-inset-bottom, 0px))`,
+              }}
+            >
+              <Button
+                variant="danger"
+                onClick={() => setShowDeleteConfirm(true)}
+                className="w-full"
+              >
+                <Trash2 className="w-4 h-4 mr-2 inline" />
+                Delete workout
+              </Button>
+              {isDirty && (
+                <Button
+                  variant="primary"
+                  onClick={handleConfirmChanges}
+                  className="w-full"
+                >
+                  <Check className="w-4 h-4 mr-2 inline" />
+                  Save changes
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Fixed Record workout button */}
-      <div 
-        className="fixed bottom-0 left-0 right-0 bg-panel border-t border-border-subtle px-5 pt-5 z-10"
-        style={{
-          paddingBottom: `max(calc(2.5rem + env(safe-area-inset-bottom, 0px)), env(safe-area-inset-bottom, 0px))`,
-        }}
-      >
-        <div className="max-w-2xl mx-auto space-y-2">
-          {durationEstimate && (
-            <p className="text-sm text-text-muted text-center">
-              Estimated time: {formatDurationRange(durationEstimate.minSec, durationEstimate.maxSec)}
-            </p>
-          )}
-          <Button
-            variant="primary"
-            onClick={handleStart}
-            className="w-full"
-          >
-            <Play className="w-4 h-4 mr-2 inline" />
-            Record workout
-          </Button>
+      {/* View mode only: Fixed Record workout bar */}
+      {!isEditMode && (
+        <div
+          className="fixed bottom-0 left-0 right-0 bg-panel border-t border-border-subtle px-5 pt-5 z-10"
+          style={{
+            paddingBottom: `max(calc(2.5rem + env(safe-area-inset-bottom, 0px)), env(safe-area-inset-bottom, 0px))`,
+          }}
+        >
+          <div className="max-w-2xl mx-auto space-y-2">
+            {durationEstimate && (
+              <p className="text-sm text-text-muted text-center">
+                Estimated time: {formatDurationRange(durationEstimate.minSec, durationEstimate.maxSec)}
+              </p>
+            )}
+            <Button variant="primary" onClick={handleStart} className="w-full">
+              <Play className="w-4 h-4 mr-2 inline" />
+              Record workout
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Delete confirmation overlay */}
       {showDeleteConfirm && (

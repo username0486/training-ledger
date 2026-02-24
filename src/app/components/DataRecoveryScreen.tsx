@@ -91,7 +91,7 @@ export function DataRecoveryScreen({
     <div className="flex flex-col h-full bg-panel">
       <TopBar title="Data Recovery" />
       
-      <div className="flex-1 overflow-y-auto p-5">
+      <div className="flex-1 overflow-x-hidden overflow-y-auto min-w-0 p-5">
         <div className="max-w-2xl mx-auto space-y-4">
           <Card className="p-6">
             <div className="flex items-start gap-3 mb-4">
