@@ -19,6 +19,20 @@ function createExerciseItems(names: string[]): ExerciseItem[] {
   return names.map((name, i) => ({ type: 'exercise' as const, id: `ex-create-${i}-${name}-${Date.now()}`, name }));
 }
 
+function itemsToEstimationExercises(items: SessionListItem[]): EstimationExercise[] {
+  const result: EstimationExercise[] = [];
+  for (const item of items) {
+    if (item.type === 'exercise') {
+      result.push({ setCount: 3, groupId: null });
+    } else {
+      for (const _ of item.children) {
+        result.push({ setCount: 3, groupId: item.id });
+      }
+    }
+  }
+  return result;
+}
+
 interface CreateWorkoutScreenProps {
   initialName?: string;
   initialExercises?: string[];
